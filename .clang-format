@@ -1,0 +1,19 @@
+---
+Language: Cpp
+BasedOnStyle: Microsoft
+Standard: c++17
+AlignAfterOpenBracket: Align
+AlignConsecutiveMacros: 'true'
+AlignConsecutiveAssignments: 'true'
+AlignConsecutiveBitFields: Consecutive
+AlignConsecutiveDeclarations: 'true'
+AlignEscapedNewlines: LeftWithLastLine
+AlignOperands: 'true'
+AlignTrailingComments: 'true'
+AllowAllConstructorInitializersOnNextLine: 'false'
+AllowAllParametersOfDeclarationOnNextLine: 'false'
+AllowShortBlocksOnASingleLine: 'false'
+IndentAccessModifiers: true
+SortIncludes: false
+UseTab: Never
+...

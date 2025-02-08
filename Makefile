@@ -33,6 +33,7 @@ OBJS = \
 # riscv64-unknown-elf- or riscv64-linux-gnu-
 # perhaps in /opt/riscv/bin
 TOOLPREFIX=riscv64-elf-
+MAKEFLAGS := --jobs=$(shell nproc)
 
 # Try to infer the correct TOOLPREFIX if not set
 ifndef TOOLPREFIX
