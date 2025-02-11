@@ -2,8 +2,13 @@
 #include "user/user.h"
 #include "kernel/fcntl.h"
 
-#define PING_PONG_LIMIT (1000u * 1000u)
-#define BUF_LEN         (32u)
+// Experiment shows that on R7-5800x @ 3600 MHz CL18 WSL,
+// it's around 4600 transactions between threads.
+//
+// Note that some of the time are probably due to string manipulations.
+#define PING_PONG_LIMIT (30u * 1000u)
+
+#define BUF_LEN (32u)
 
 #define my_assert(x)  \
     do                \
