@@ -2,22 +2,38 @@
 #include "user/user.h"
 #include "kernel/fcntl.h"
 
-#define PING_PONG_LIMIT (100u)
+#define PING_PONG_LIMIT (1000u * 1000u)
 #define BUF_LEN         (32u)
-#define my_exit_failure                                                                                                \
-    do                                                                                                                 \
-    {                                                                                                                  \
-        exit(168);                                                                                                     \
-    } while (0)
-#define my_assert(x)                                                                                                   \
-    do                                                                                                                 \
-    {                                                                                                                  \
-        if (!(x))                                                                                                      \
-        {                                                                                                              \
-            my_exit_failure;                                                                                           \
-        }                                                                                                              \
+
+#define my_assert(x)  \
+    do                \
+    {                 \
+        if (!(x))     \
+        {             \
+            exit(-1); \
+        }             \
     } while (0)
 
+#define my_assert_eq(x, y)     \
+    do                         \
+    {                          \
+        my_assert((x) == (y)); \
+    } while (0)
+
+#define my_assert_ne(x, y)     \
+    do                         \
+    {                          \
+        my_assert((x) != (y)); \
+    } while (0)
+
+/**
+ * Assuming `len` accomodates `u` in string form just fine,
+ * (plus the implicit null terminator)
+ * it's equivalent to `snprintf(buf, "%lu", u, len)`,
+ * else the pointed memory are not touched.
+ *
+ * Return zero iff everything went OK.
+ */
 int my_unsigned_to_str(char *buf, const uint64 len, const uint64 u)
 {
     if ((!buf) || (0 == len))
@@ -51,11 +67,20 @@ int my_unsigned_to_str(char *buf, const uint64 len, const uint64 u)
     }
 }
 
+/**
+ * If the string represents some valid __decimal unsigned number__,
+ * that value is returned, else return value would be zero.
+ *
+ * In order to differentiate between a valid zero and invalid number,
+ * user may supply `success` pointer:
+ * if `success` not null, it would store if the translation succeeded.
+ */
 uint64 my_str_to_unsigned(const char *s, uint8 *success)
 {
     uint64 result    = 0;
     uint64 len       = strlen(s);
-    uint8  successed = 1;
+    uint8  succeeded = 1; // by default assume OK; set to zero if error were to occur
+
     if (len > 0)
     {
         for (uint64 offset = len - 1, multipier = 1; offset < len; --offset, multipier *= 10)
@@ -67,7 +92,7 @@ uint64 my_str_to_unsigned(const char *s, uint8 *success)
                 {
                     // overflow, reject
                     result    = 0;
-                    successed = 0;
+                    succeeded = 0;
                     break;
                 }
                 else
@@ -79,7 +104,7 @@ uint64 my_str_to_unsigned(const char *s, uint8 *success)
             {
                 // invalid char, reject
                 result    = 0;
-                successed = 0;
+                succeeded = 0;
                 break;
             }
         }
@@ -87,14 +112,20 @@ uint64 my_str_to_unsigned(const char *s, uint8 *success)
         if ('0' == s[0] && len > 1)
         {
             result    = 0;
-            successed = 0;
+            succeeded = 0;
         }
+    }
+    else
+    {
+        // empty string is not a valid number
+        succeeded = 0;
     }
 
     if (success)
     {
-        *success = successed;
+        *success = succeeded;
     }
+
     return result;
 }
 
@@ -113,11 +144,9 @@ int main()
     }
 
     const int fork_result = fork();
-    if (fork_result < 0)
-    {
-        my_exit_failure;
-    }
-    else if (fork_result == 0)
+    my_assert(fork_result >= 0);
+
+    if (fork_result == 0)
     {
         // child
         close(parent_rx_child_tx[0]);
@@ -133,12 +162,10 @@ int main()
         char buf[BUF_LEN] = {0};
         while (read(0, buf, BUF_LEN) > 0)
         {
-            fprintf(2, "child s:%s\n", buf);
             uint8        success        = 1;
             const uint64 received_token = my_str_to_unsigned(buf, &success);
-            fprintf(2, "child u:%u\n", (uint32)received_token);
             my_assert(success);
-            my_assert(0 == my_unsigned_to_str(buf, BUF_LEN, received_token + 1));
+            my_assert_eq(my_unsigned_to_str(buf, BUF_LEN, received_token + 1), 0);
             if (strlen(buf) == write(1, buf, strlen(buf)))
             {
                 memset(buf, 0, BUF_LEN);
@@ -167,21 +194,24 @@ int main()
         uint64 ping_pong    = 0;
         uint8  success      = 1;
         char   buf[BUF_LEN] = {0};
-        my_assert(0 == my_unsigned_to_str(buf, BUF_LEN, ping_pong));
-        fprintf(2, "parent '%s'\n", buf);
 
-        my_assert(strlen(buf) == write(1, buf, strlen(buf)));
-        do
+        while (ping_pong <= PING_PONG_LIMIT && success)
         {
+            my_assert_eq(my_unsigned_to_str(buf, BUF_LEN, ping_pong), 0);
+            my_assert_eq(write(1, buf, strlen(buf)), strlen(buf));
             memset(buf, 0, BUF_LEN);
             if (read(0, buf, BUF_LEN) > 0)
             {
                 ping_pong = my_str_to_unsigned(buf, &success);
-                my_assert(success);
-                my_assert(0 == my_unsigned_to_str(buf, BUF_LEN, ping_pong + 1));
-                my_assert(strlen(buf) == write(1, buf, strlen(buf)));
+                ping_pong += 1;
             }
-        } while (ping_pong <= PING_PONG_LIMIT);
-        return 0;
+            else
+            {
+                success = 0;
+            }
+        }
+
+        fprintf(2, "parent: %lu\n", ping_pong);
+        return !success;
     }
 }
