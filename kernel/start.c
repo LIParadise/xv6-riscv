@@ -24,6 +24,7 @@ void start()
     w_mepc((uint64)main);
 
     // disable paging for now.
+    // `satp`: supervisor address translation and protection
     w_satp(0);
 
     // delegate all interrupts and exceptions to supervisor mode.
