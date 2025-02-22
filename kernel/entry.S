@@ -17,11 +17,13 @@ _entry:
         mul a0, a0, a1
         add sp, sp, a0
         # jump to start() in start.c
-        # note that so for hartid `n`, its `sp` is at `4096 * n`
-        # in particular accessing what's on `sp` directly is **invalid**,
-        # which is just normal behavior if you think about it:
-        # if you're gonna push something onto the stack, say `uint64_t`,
-        # you move the `sp` by `8`.
+        /*
+         * note that so for hartid `n`, its `sp` is at `4096 * n`
+         * in particular accessing what's on `sp` directly is **invalid**,
+         * which is just normal behavior if you think about it:
+         * if you're gonna push something onto the stack, say `uint64_t`,
+         * you move the `sp` by `8`.
+         */
         call start
 spin:
         j spin
