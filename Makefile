@@ -1,8 +1,9 @@
 K=kernel
 U=user
 
+# note that ordering matters to some extent,
+# since we're using some basic custom linker scripts `kernel/kernel.ld`.
 OBJS = \
-  $K/entry.o \
   $K/start.o \
   $K/console.o \
   $K/printf.o \
@@ -23,6 +24,7 @@ OBJS = \
   $K/log.o \
   $K/sleeplock.o \
   $K/file.o \
+  $K/entry.o \
   $K/pipe.o \
   $K/exec.o \
   $K/sysfile.o \

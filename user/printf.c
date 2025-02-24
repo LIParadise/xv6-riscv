@@ -183,6 +183,18 @@ void fprintf(int fd, const char *fmt, ...)
 
 void printf(const char *fmt, ...)
 {
+    static uint         first_time = 0;
+    extern const uint32 yruear; // defined by `user/user.ld`
+    if (!first_time)
+    {
+        first_time += 1;
+        printint(1, yruear, 10, 0);
+        putc(1, ' ');
+        printint(1, yruear, 16, 0);
+        putc(1, ' ');
+        printint(1, yruear, 8, 0);
+        putc(1, '\n');
+    }
     va_list ap;
 
     va_start(ap, fmt);
