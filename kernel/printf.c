@@ -21,7 +21,7 @@ volatile int panicked = 0;
 static struct
 {
         struct spinlock lock;
-        int             locking;
+        int             acquire_lock_before_use;
 } pr;
 
 static char digits[] = "0123456789abcdef";
@@ -63,12 +63,14 @@ static void printptr(uint64 x)
 int printf(char *fmt, ...)
 {
     va_list ap;
-    int     i, cx, c0, c1, c2, locking;
+    int     i, cx, c0, c1, c2, acquire_lock_before_use;
     char   *s;
 
-    locking = pr.locking;
-    if (locking)
+    acquire_lock_before_use = pr.acquire_lock_before_use;
+    if (acquire_lock_before_use)
+    {
         acquire(&pr.lock);
+    }
 
     va_start(ap, fmt);
     for (i = 0; (cx = fmt[i] & 0xff) != 0; i++)
@@ -183,7 +185,7 @@ int printf(char *fmt, ...)
     }
     va_end(ap);
 
-    if (locking)
+    if (acquire_lock_before_use)
         release(&pr.lock);
 
     return 0;
@@ -191,7 +193,7 @@ int printf(char *fmt, ...)
 
 void panic(char *s)
 {
-    pr.locking = 0;
+    pr.acquire_lock_before_use = 0;
     printf("panic: ");
     printf("%s\n", s);
     panicked = 1; // freeze uart output from other CPUs
@@ -202,5 +204,5 @@ void panic(char *s)
 void printfinit(void)
 {
     initlock(&pr.lock, "pr");
-    pr.locking = 1;
+    pr.acquire_lock_before_use = 1;
 }
