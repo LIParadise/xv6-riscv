@@ -34,3 +34,38 @@ Note that [according to the C89 standard 3.5.7](https://stackoverflow.com/questi
 In practice, `riscv64-elf-objdump -t kernel/kernel | grep kmem` shows that it's indeed in the `.bss` section, which is normally used just like described above: some variables that we initialize to zero by some initializer code right before your actual program got run.
 
 In particular, it's still within `0x80_000_000..end` (see also `kernel/kernel.ld`), i.e. it lives outside of the pages manipulated by `kalloc`/`kfree`.
+
+### Interrupts
+
+Supposedly `push_off`/`pop_off` shall not be called in ISRs, since by default [RISC-V](https://www.reddit.com/r/RISCV/comments/jo0yba) should disable interrupt upon interrupt, so no nesting occurs unless the programmer specifies it to, which is kinda absurd in that case you'd like to toggle interrupt using such utilities.
+Plus, by default, no interrupt nesting is enabled on RISC-V, so maybe just don't worry too much about `push_off`/`pop_off` reentrance for now.
+
+#### 3.1.6.1 Privilege and Global Interrupt-Enable Stack in mstatus register, V20190608-Priv-MSU-Ratified
+
+[reddit comment](https://www.reddit.com/r/RISCV/comments/jo0yba/comment/gb7fnri)
+> So basically, for machine-mode-only, you have MIE (interrupt enable for machine mode) and MPIE (previous interrupt enable for machine mode). When you enter an interrupt (because MIE is enabled and an interrupt happened), MPIE saves the value of MIE and MIE is set to zero, to ensure no further interrupt happens while servicing the first.
+> When returning from the interrupt service routine (via mret), MIE will be restored from MPIE, enabling interrupts again, so the next interrupt can go in and do its thing.
+> Alternatively the interrupt service routine can check the MIP register (machine interrupt pending) and service pending interrupts before mret'ing to avoid having to service another interrupt immediately after returning.
+> ...instruction-address-misaligned exception must occur at all time
+> In this case the MEPC, MCAUSE etc. registers are overwritten. I guess you'll have to save those registers when entering your service routine and restore them before issuing your mret (if you cannot guarantee your servicing code won't issue traps or cause exceptions). This way your program stack saves your machine status for each nested trap and/or exception.
+> After all, with unlimited potential for nested exceptions, all that machine state (for instance, the EPC) has to be stored *somewhere* and one certainly does not want to have an extensive hidden stack of registers in the hardware design.
+
+[reddit comment](https://www.reddit.com/r/RISCV/comments/jo0yba/comment/gb86vtt)
+> Interrupts are automatically disabled when an interrupt occurs. Usually, interrupt handlers just save some registers (including mepc), and then re-enable interrupts before continuing.
+> yes, but exceptions can not be disabled. So if an interrupt happens and an exception occurs inside the interrupt will the system still write mpec?
+> Yes. So don't cause any exceptions until you save mepc ;) This is a "double-fault" in intel-esque parlance. Usually, the OS just bails at that point.
+
+#### Other Materials
+
+[reddit post](https://www.reddit.com/r/RISCV/comments/fy09gs)
+[five-embeddev](https://www.five-embeddev.com/code/2022/06/29/nested-interrupts/)
+
+### RISC-V Atomics
+
+[openhwgroup](https://docs.openhwgroup.org/projects/cva6-user-manual/01_cva6_user/RISCV_Instructions_RV32A.html)
+> The two forms of atomic instruction provided are load-reserved/store-conditional instructions and atomic fetch-and-op memory instructions. Both types of atomic instruction support various memory consistency orderings including unordered, acquire, release, and sequentially consistent semantics.
+
+### Generic Notes
+
+[stack overflow](https://stackoverflow.com/questions/46803230/how-to-call-an-enum-in-an-asm-file#comment80553587_46803230)
+> Another observation. The CDECL calling convention makes EAX, ECX and EDX volatile registers. Your functions can clobber those registers and you are fine. However EBX, ESI, EDI, EBP are non-volatile. If you change their values you must ensure you save them at the top of your function and then restore them at the bottom. Usually done by pushing the value to save and poping them to restore. Your program may seem to work but it is possible it may fail unexpectedly. I say this because I see a couple of functions you clobber EBX but you do nothing to save/restore its value.

@@ -6,7 +6,7 @@
 #include "defs.h"
 #include "fs.h"
 
-/*
+/**
  * the kernel's page table.
  */
 pagetable_t kernel_pagetable;

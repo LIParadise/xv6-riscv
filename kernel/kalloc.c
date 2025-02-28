@@ -11,8 +11,11 @@
 
 static void freerange(void *pa_start, void *pa_end);
 
-extern char kernel_end_marked_by_ld[]; // first address after kernel.
-                                       // defined by kernel.ld.
+/**
+ * first address after kernel,
+ * defined by `kernel/kernel.ld`
+ */
+extern char kernel_end_marked_by_ld[];
 
 struct kmem_linked_list_node
 {
@@ -120,7 +123,7 @@ void *kalloc(void)
  *
  * N.B. this function is protected by spinlock.
  */
-uint64 free_pages(void)
+uint64 sys_get_free_pages(void)
 {
     uint64 ret = 0;
     acquire(&kmem.lock);
