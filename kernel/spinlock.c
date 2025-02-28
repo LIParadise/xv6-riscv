@@ -34,6 +34,10 @@ void acquire(struct spinlock *lk)
     // past this point, to ensure that the critical section's memory
     // references happen strictly after the lock is acquired.
     // On RISC-V, this emits a fence instruction.
+    //
+    // TODO:
+    // maybe a compiler fence suffices,
+    // for the `amoswap.aq` should provide C/C++11 acquire semantics already?
     __sync_synchronize();
 
     // Record info about lock acquisition for holding() and debugging.
@@ -77,10 +81,29 @@ int holding(struct spinlock *lk)
     return r;
 }
 
-// push_off/pop_off are like intr_off()/intr_on() except that they are matched:
-// it takes two pop_off()s to undo two push_off()s.  Also, if interrupts
-// are initially off, then push_off, pop_off leaves them off.
-
+/**
+ * push_off/pop_off are like intr_off()/intr_on() except that they are matched:
+ * it takes two pop_off()s to undo two push_off()s.  Also, if interrupts
+ * are initially off, then push_off, pop_off leaves them off.
+ *
+ * N.B.
+ * 1. This is per-CPU operation, assuming no SMP support,
+ *    we don't need to care about concurrency,
+ *    in particular all we have and all we need are sequenced before relationships.
+ * 2. As long as we don't put this function inside some ISR,
+ *    we don't really need to care about interrupt nesting.
+ * 3. By default, RISC-V assumes no nesting interrupts,
+ *    via deasserting `mie` (machine interrupt enable) upon interrupt.
+ * 4. Unfortunately from comment in spinlock acquire,
+ *    we know that XV6 did somehow has to worry about nested interrupts......
+ *    but when exactly did we enable nested interrupts?
+ * 5. Consider if this function were somehow reentrant concurrently,
+ *    since the critical seciont i.e. the real write operation
+ *    comes only after the interrupt is set to off,
+ *    only the deepest interrupt writes the per-CPU data,
+ *    and since no other interrupt had written anything yet,
+ *    the deepest guy writes the correct values.
+ */
 void push_off(void)
 {
     int old = intr_get();
@@ -91,6 +114,11 @@ void push_off(void)
     mycpu()->noff += 1;
 }
 
+/**
+ * push_off/pop_off are like intr_off()/intr_on() except that they are matched:
+ * it takes two pop_off()s to undo two push_off()s.  Also, if interrupts
+ * are initially off, then push_off, pop_off leaves them off.
+ */
 void pop_off(void)
 {
     struct cpu *c = mycpu();

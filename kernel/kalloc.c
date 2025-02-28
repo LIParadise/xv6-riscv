@@ -9,72 +9,125 @@
 #include "riscv.h"
 #include "defs.h"
 
-void freerange(void *pa_start, void *pa_end);
+static void freerange(void *pa_start, void *pa_end);
 
-extern char end[]; // first address after kernel.
-                   // defined by kernel.ld.
+/**
+ * first address after kernel,
+ * defined by `kernel/kernel.ld`
+ */
+extern char kernel_end_marked_by_ld[];
 
-struct run
+struct kmem_linked_list_node
 {
-        struct run *next;
+        struct kmem_linked_list_node *next;
 };
 
 struct
 {
-        struct spinlock lock;
-        struct run     *freelist;
+        struct spinlock               lock;
+        struct kmem_linked_list_node *free_pages;
+        uint64                        num_pages;
 } kmem;
 
 void kinit()
 {
     initlock(&kmem.lock, "kmem");
-    freerange(end, (void *)PHYSTOP);
+    freerange(kernel_end_marked_by_ld, (void *)PHYSTOP);
 }
 
-void freerange(void *pa_start, void *pa_end)
+/**
+ * Given start and end address,
+ * for all the whole pages that lies inside `start..end` (in Rust terms),
+ * declare them as free memory.
+ */
+static void freerange(void *pa_start, void *pa_end)
 {
-    char *p;
-    p = (char *)PGROUNDUP((uint64)pa_start);
-    for (; p + PGSIZE <= (char *)pa_end; p += PGSIZE)
+    for (char *p = (char *)PGROUNDUP((uint64)pa_start); p + PGSIZE <= (char *)pa_end; p += PGSIZE)
+    {
         kfree(p);
+    }
 }
 
-// Free the page of physical memory pointed at by pa,
-// which normally should have been returned by a
-// call to kalloc().  (The exception is when
-// initializing the allocator; see kinit above.)
+/**
+ * Free the page of physical memory pointed at by pa,
+ * which normally should have been returned by a call to `kalloc`.
+ * (The exception is when initializing the allocator;
+ * see `kinit` above.)
+ *
+ * Note that `kalloc` is protected by spinlock,
+ * so it shall never give out the same memory,
+ * so we do NOT bother checking if `pa` is already free!!!
+ *
+ * Memory corruption ensues if user freed memory twice!!!!!
+ *
+ * TODO
+ * How does GNU/Linux typically catch such error?
+ * Some sort of map kept by the C standard library?
+ * In general how does Linux manage memory?
+ * It can't possibly be just a global spinlock...
+ */
 void kfree(void *pa)
 {
-    struct run *r;
+    struct kmem_linked_list_node *r;
 
-    if (((uint64)pa % PGSIZE) != 0 || (char *)pa < end || (uint64)pa >= PHYSTOP)
+    if (((uint64)pa % PGSIZE) != 0 || (char *)pa < kernel_end_marked_by_ld || (uint64)pa >= PHYSTOP)
+    {
         panic("kfree");
+    }
 
     // Fill with junk to catch dangling refs.
     memset(pa, 1, PGSIZE);
 
-    r = (struct run *)pa;
+    r = (struct kmem_linked_list_node *)pa;
 
     acquire(&kmem.lock);
-    r->next       = kmem.freelist;
-    kmem.freelist = r;
+    r->next         = kmem.free_pages;
+    kmem.free_pages = r;
+    kmem.num_pages += 1;
     release(&kmem.lock);
 }
 
-// Allocate one 4096-byte page of physical memory.
-// Returns a pointer that the kernel can use.
-// Returns 0 if the memory cannot be allocated.
+/**
+ * Allocate one 4096-byte page of physical memory.
+ *
+ * Protected by spinlock,
+ * s.t. so long as no one corrupts memory via `kfree`,
+ * the memory given out from here never aliases.
+ *
+ * Return value is zero if cannot be allocated,
+ * else it's pointer intended for kernel's own usage.
+ */
 void *kalloc(void)
 {
-    struct run *r;
+    struct kmem_linked_list_node *r;
 
     acquire(&kmem.lock);
-    r = kmem.freelist;
+    r = kmem.free_pages;
     if (r)
-        kmem.freelist = r->next;
+    {
+        kmem.free_pages = r->next;
+        kmem.num_pages -= 1;
+    }
     release(&kmem.lock);
 
     if (r)
+    {
         memset((char *)r, 5, PGSIZE); // fill with junk
+    }
+
     return (void *)r;
+}
+
+/**
+ * How many memory (in pages) are there?
+ *
+ * N.B. this function is protected by spinlock.
+ */
+uint64 sys_get_free_pages(void)
+{
+    uint64 ret = 0;
+    acquire(&kmem.lock);
+    ret = kmem.num_pages;
+    release(&kmem.lock);
+    return ret;
 }

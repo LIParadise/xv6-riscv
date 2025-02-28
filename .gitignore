@@ -10,10 +10,10 @@ compile_commands.json
 vectors.S
 bootblock
 entryother
+fs.img
 initcode
 initcode.out
 kernelmemfs
-mkfs
 kernel/kernel
 user/usys.S
 .gdbinit

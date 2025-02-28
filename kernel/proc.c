@@ -480,7 +480,7 @@ void scheduler(void)
         {
             // nothing to run; stop running on this core until an interrupt.
             intr_on();
-            asm volatile("wfi");
+            __asm__ volatile("wfi");
         }
     }
 }

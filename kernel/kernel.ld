@@ -3,13 +3,16 @@ ENTRY( _entry )
 
 SECTIONS
 {
-  /*
-   * ensure that entry.S / _entry is at 0x80000000,
-   * where qemu's -kernel jumps.
-   */
+  /* set VMA (and LMA since no `AT`) for qemu */
   . = 0x80000000;
 
   .text : {
+   /*
+    * ensure that entry.S / _entry is at 0x80000000,
+    * where qemu's -kernel jumps:
+    * this line helps `Makefile` to be order-agnostic
+    */
+    kernel/entry.o(.text)
     *(.text .text.*)
     . = ALIGN(0x1000);
     _trampoline = .;
@@ -40,5 +43,5 @@ SECTIONS
     *(.bss .bss.*)
   }
 
-  PROVIDE(end = .);
+  PROVIDE(kernel_end_marked_by_ld = .);
 }

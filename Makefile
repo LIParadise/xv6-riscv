@@ -1,8 +1,9 @@
 K=kernel
 U=user
 
+# note that ordering matters to some extent,
+# since we're using some basic custom linker scripts `kernel/kernel.ld`.
 OBJS = \
-  $K/entry.o \
   $K/start.o \
   $K/console.o \
   $K/printf.o \
@@ -23,6 +24,7 @@ OBJS = \
   $K/log.o \
   $K/sleeplock.o \
   $K/file.o \
+  $K/entry.o \
   $K/pipe.o \
   $K/exec.o \
   $K/sysfile.o \
@@ -57,7 +59,7 @@ LD = $(TOOLPREFIX)ld
 OBJCOPY = $(TOOLPREFIX)objcopy
 OBJDUMP = $(TOOLPREFIX)objdump
 
-CFLAGS = -Wall -Werror -O -fno-omit-frame-pointer -ggdb -gdwarf-2
+CFLAGS = -Wall -Werror -O -fno-omit-frame-pointer -ggdb -gdwarf-2 -std=c11
 CFLAGS += -MD
 CFLAGS += -mcmodel=medany
 # CFLAGS += -ffreestanding -fno-common -nostdlib -mno-relax
@@ -140,6 +142,7 @@ UPROGS=\
 	$U/_grind\
 	$U/_wc\
 	$U/_zombie\
+	$U/_free
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)
