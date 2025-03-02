@@ -67,18 +67,30 @@ void kvminithart()
     sfence_vma();
 }
 
-// Return the address of the PTE in page table pagetable
-// that corresponds to virtual address va.  If alloc!=0,
-// create any required page-table pages.
-//
-// The risc-v Sv39 scheme has three levels of page-table
-// pages. A page-table page contains 512 64-bit PTEs.
-// A 64-bit virtual address is split into five fields:
-//   39..63 -- must be zero.
-//   30..38 -- 9 bits of level-2 index.
-//   21..29 -- 9 bits of level-1 index.
-//   12..20 -- 9 bits of level-0 index.
-//    0..11 -- 12 bits of byte offset within the page.
+/**
+ * Return the address of the PTE in page table pagetable
+ * that corresponds to virtual address va.
+ * If alloc != 0, create any required page-table pages.
+ *
+ * N.B.
+ * 1. The fresh L0 page table is `memset` to all zero,
+ *    thus if user add new pages to the page table via only this function,
+ *    and that if user is sure that this input VA must not be in the table,
+ *    user may check the `PTE_V` bit of the returned PTE:
+ *    if that bit is set, it's an error in `kalloc`, giving out aliased memory.
+ * 2. Return `NULL` if page absent and either of the following:
+ *    a. alloc flag not set
+ *    b. `kalloc` failed, probably because out of memory
+ *
+ * The risc-v Sv39 scheme has three levels of page-table
+ * pages. A page-table page contains 512 64-bit PTEs.
+ * A 64-bit virtual address is split into five fields:
+ *   39..63 -- must be zero.
+ *   30..38 -- 9 bits of level-2 index.
+ *   21..29 -- 9 bits of level-1 index.
+ *   12..20 -- 9 bits of level-0 index.
+ *   0..11 -- 12 bits of byte offset within the page.
+ */
 pte_t *walk(pagetable_t pagetable, uint64 va, int alloc)
 {
     if (va >= MAXVA)
@@ -133,16 +145,18 @@ void kvmmap(pagetable_t kpgtbl, uint64 va, uint64 pa, uint64 sz, int perm)
         panic("kvmmap");
 }
 
-// Create PTEs for virtual addresses starting at va that refer to
-// physical addresses starting at pa.
-// va and size MUST be page-aligned.
-// Returns 0 on success, -1 if walk() couldn't
-// allocate a needed page-table page.
-int mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
+/**
+ * Create PTEs for virtual addresses starting at va that refer to
+ * physical addresses starting at pa.
+ *
+ * va and size MUST be page-aligned.
+ *
+ * Returns 0 on success,
+ * non-zero if walk() couldn't allocate a needed page-table page,
+ * panic if VA of the `pagetable_t` leads to a remap.
+ */
+int mappages(pagetable_t pagetable, const uint64 va, const uint64 size, const uint64 pa, const int perm)
 {
-    uint64 a, last;
-    pte_t *pte;
-
     if ((va % PGSIZE) != 0)
         panic("mappages: va not aligned");
 
@@ -152,19 +166,14 @@ int mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
     if (size == 0)
         panic("mappages: size");
 
-    a    = va;
-    last = va + size - PGSIZE;
-    for (;;)
+    pte_t *pte;
+    for (uint64 v = va, p = pa; v < va + size; v += PGSIZE, p += PGSIZE)
     {
-        if ((pte = walk(pagetable, a, 1)) == 0)
+        if (0 == (pte = walk(pagetable, v, 1)))
             return -1;
         if (*pte & PTE_V)
             panic("mappages: remap");
-        *pte = PA2PTE(pa) | perm | PTE_V;
-        if (a == last)
-            break;
-        a += PGSIZE;
-        pa += PGSIZE;
+        *pte = PA2PTE(p) | perm | PTE_V;
     }
     return 0;
 }
@@ -221,6 +230,8 @@ void uvmfirst(pagetable_t pagetable, uchar *src, uint sz)
     mem = kalloc();
     memset(mem, 0, PGSIZE);
     mappages(pagetable, 0, PGSIZE, (uint64)mem, PTE_W | PTE_R | PTE_X | PTE_U);
+    // why not `memcpy`? `kalloc` shall not give out aliased pages...
+    // well we don't have C standard library to link to.
     memmove(mem, src, sz);
 }
 
@@ -279,28 +290,48 @@ void freewalk(pagetable_t pagetable)
     // there are 2^9 = 512 PTEs in a page table.
     for (int i = 0; i < 512; i++)
     {
-        pte_t pte = pagetable[i];
-        if ((pte & PTE_V) && (pte & (PTE_R | PTE_W | PTE_X)) == 0)
+        const pte_t pte = pagetable[i];
+        if (pte & PTE_V) // `!PTE_V` deemed as not allocated in XV6
         {
-            // this PTE points to a lower-level page table.
-            uint64 child = PTE2PA(pte);
-            freewalk((pagetable_t)child);
-            pagetable[i] = 0;
-        }
-        else if (pte & PTE_V)
-        {
-            panic("freewalk: leaf");
+            if (pte & (PTE_X | PTE_R | PTE_W))
+            {
+                // By Sv39 standard,
+                // 1. leaf iff `PTE_X || PTE_R`, which is assumed to be absent in this function
+                // 2. valid PTE cannot be `(!PTE_R) && PTE_W`
+                //
+                // This function assumes no leave and PTEs are valid,
+                // thus the check.
+                panic("freewalk: invalid PTE or leaf");
+            }
+            else
+            {
+                // this PTE points to a lower-level page table.
+                //
+                // Sv39 requires hardware to check tree traversal depth,
+                // issuing page faults if deeper than expected;
+                // we omit such mechanism here.
+                const uint64 child = PTE2PA(pte);
+                freewalk((pagetable_t)child);
+                pagetable[i] = 0;
+            }
         }
     }
     kfree((void *)pagetable);
 }
 
-// Free user memory pages,
-// then free page-table pages.
+/**
+ * Free user memory pages, then free page-table pages.
+ */
 void uvmfree(pagetable_t pagetable, uint64 sz)
 {
     if (sz > 0)
+    {
+        /*
+         * This is how much we kernel had given out in `exec`:
+         * XV6 isn't the best in either space efficiency or speed.
+         */
         uvmunmap(pagetable, 0, PGROUNDUP(sz) / PGSIZE, 1);
+    }
     freewalk(pagetable);
 }
 

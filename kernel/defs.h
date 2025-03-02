@@ -159,7 +159,7 @@ int  uartgetc(void);
 void        kvminit(void);
 void        kvminithart(void);
 void        kvmmap(pagetable_t, uint64, uint64, uint64, int);
-int         mappages(pagetable_t, uint64, uint64, uint64, int);
+int         mappages(pagetable_t, const uint64, const uint64, const uint64, const int);
 pagetable_t uvmcreate(void);
 void        uvmfirst(pagetable_t, uchar *, uint);
 uint64      uvmalloc(pagetable_t, uint64, uint64, int);

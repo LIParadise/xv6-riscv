@@ -73,6 +73,13 @@ int exec(char *path, char **argv)
     end_op();
     ip = 0;
 
+    // the `end_op` call may `sleep`,
+    // meaning we may end up scheduled on a different CPU.
+    //
+    // see also `kernel/virtio_disk.c`
+    //
+    // still, do we **really** need this call,
+    // since the pointer should not change?
     p            = myproc();
     uint64 oldsz = p->sz;
 
@@ -80,13 +87,19 @@ int exec(char *path, char **argv)
     // Make the first inaccessible as a stack guard.
     // Use the rest as the user stack.
     sz = PGROUNDUP(sz);
-    uint64 sz1;
-    if ((sz1 = uvmalloc(pagetable, sz, sz + (USERSTACK + 1) * PGSIZE, PTE_W)) == 0)
-        goto bad;
-    sz = sz1;
-    uvmclear(pagetable, sz - (USERSTACK + 1) * PGSIZE);
-    sp        = sz;
-    stackbase = sp - USERSTACK * PGSIZE;
+    {
+        uint64 size_with_ustack_and_guard = uvmalloc(pagetable, sz, sz + (USERSTACK + 1) * PGSIZE, PTE_W);
+        if (!size_with_ustack_and_guard || size_with_ustack_and_guard != sz + (USERSTACK + 1) * PGSIZE)
+        {
+            goto bad;
+        }
+        else
+        {
+            uvmclear(pagetable, sz); // user stack guard
+            stackbase = sz + PGSIZE;
+            sz = sp = size_with_ustack_and_guard;
+        }
+    }
 
     // Push argument strings, prepare rest of stack in ustack.
     for (argc = 0; argv[argc]; argc++)

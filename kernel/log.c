@@ -146,8 +146,12 @@ void begin_op(void)
     }
 }
 
-// called at the end of each FS system call.
-// commits if this was the last outstanding operation.
+/**
+ * called at the end of each FS system call.
+ * commits if this was the last outstanding operation.
+ *
+ * This function may `sleep`!
+ */
 void end_op(void)
 {
     int do_commit = 0;
