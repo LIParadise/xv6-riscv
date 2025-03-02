@@ -305,6 +305,17 @@ static inline void sfence_vma()
     __asm__ volatile("sfence.vma zero, zero");
 }
 
+/**
+ * Get some entropy via the `seed` CSR.
+ * Note that this is actually unprivileged.
+ */
+static inline uint32 r_seed()
+{
+    uint32 ret;
+    __asm__ volatile("csrrw %0, seed, %0" : "=r"(ret));
+    return ret;
+}
+
 typedef uint64  pte_t;
 typedef uint64 *pagetable_t; // 512 PTEs
 

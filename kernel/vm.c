@@ -15,6 +15,39 @@ extern char etext[]; // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
 
+/**
+ * Naive PRNG implementation
+ * Intended usage is upon boot, the first HART may use it to do KASLR.
+ */
+static inline uint64 get_rnd()
+{
+    static uint64 lfsr_feed                      = 0;
+    static uint64 linear_feedback_shift_register = 0X4269ACCEED114514;
+    if (!lfsr_feed)
+    {
+        // arbitrary chosen shift for the initial values
+        uint64 time = r_time();
+        uint32 prng = r_seed();
+        lfsr_feed   = time ^ prng ^ (((uint64)prng) << 32);
+    }
+
+    // https://www.reddit.com/r/RISCV/comments/1cy8zs2/comment/l597uu3
+    if (1 & linear_feedback_shift_register)
+    {
+        // LSB set
+        // let's do linear feedback shift
+        linear_feedback_shift_register = (linear_feedback_shift_register >> 1) ^ lfsr_feed;
+    }
+    else
+    {
+        // LSB not set,
+        // note that this is equivalent to rotate
+        linear_feedback_shift_register >>= 1;
+    }
+
+    return linear_feedback_shift_register;
+}
+
 // Make a direct-map page table for the kernel.
 pagetable_t kvmmake(void)
 {
