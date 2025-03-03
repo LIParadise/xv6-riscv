@@ -60,9 +60,10 @@ void ramdiskintr(void);
 void ramdiskrw(struct buf *);
 
 // kalloc.c
-void *kalloc(void);
-void  kfree(void *);
-void  kinit(void);
+void  *kalloc(void);
+void   kfree(void *);
+void   kinit(void);
+uint64 sys_get_free_pages(void);
 
 // log.c
 void initlog(int, struct superblock *);

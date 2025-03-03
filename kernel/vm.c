@@ -17,15 +17,17 @@ extern char trampoline[]; // trampoline.S
 
 /**
  * Naive PRNG implementation
- * Intended usage is upon boot, the first HART may use it to do KASLR.
+ * Intended usage is for the HART zero to do KASLR upon boot.
  */
-static inline uint64 get_rnd()
+static inline uint64 rnd64()
 {
+    // initial seed should be s.t. LSB equal to 1
+    // making sure upon the first call LFSR is already at work.
+    static uint64 linear_feedback_shift_register = 0X4269114514ACCEED;
     static uint64 lfsr_feed                      = 0;
-    static uint64 linear_feedback_shift_register = 0X4269ACCEED114514;
+
     if (!lfsr_feed)
     {
-        // arbitrary chosen shift for the initial values
         uint64 time = r_time();
         uint32 prng = r_seed();
         lfsr_feed   = time ^ prng ^ (((uint64)prng) << 32);
@@ -46,6 +48,38 @@ static inline uint64 get_rnd()
     }
 
     return linear_feedback_shift_register;
+}
+
+/**
+ * Copy all the kernel `.text`/`.data`/`.rodata` to some free memory,
+ * put them into kernel allocator with `kfree`,
+ * then jump to the new location.
+ *
+ * Kernel should be compiled with `-fno-pie` and linked with `-no-pie`.
+ * Yeah the GNU compiler toolchain flags are not the most straightforward.
+ *
+ * This function is extremely unsafe:
+ * it assumes and modifies the internal data structure of `kalloc`/`kfree` (linked lists),
+ * and thus should be called only when other HARTs are not running,
+ * also it assumes certain layout in `kernel/kernel.ld`, specifically it places `etext` marker for end of kernel.
+ */
+void kaslr(void)
+{
+    const uint64 free_ram_base        = PGROUNDUP((uint64)etext);
+    uint64       free_pages           = (PHYSTOP - free_ram_base) / PGSIZE;
+    uint64       kernel_size_in_pages = (free_ram_base - KERNBASE) / PGSIZE;
+    if (free_pages < kernel_size_in_pages)
+    {
+        // kaslr without sufficient RAM is troublesome: need temporary space
+        // just don't do it since XV6 is already tiny,
+        // unless you want to port XV6 onto some physical RISC-V platform.
+        return;
+    }
+
+    uint64 kaslr_pa_start = PGROUNDUP((uint64)etext) + PGSIZE * (rnd64() % (free_pages - kernel_size_in_pages + 1));
+
+    // modify the linked list on it (see also `kinit` in `kernel/kalloc.c`)
+    // note that the linked list goes backwards: head is last page.
 }
 
 // Make a direct-map page table for the kernel.
@@ -84,6 +118,14 @@ pagetable_t kvmmake(void)
 // Initialize the one kernel_pagetable
 void kvminit(void)
 {
+    static uint8 kaslr_done = 0;
+    if (!kaslr_done)
+    {
+        // `kaslr` jumps to the relocated `kvminit` function,
+        // thus assert the flag first, else we won't see it.
+        kaslr_done = 1;
+        kaslr();
+    }
     kernel_pagetable = kvmmake();
 }
 
