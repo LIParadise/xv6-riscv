@@ -119,6 +119,56 @@ void *kalloc(void)
 }
 
 /**
+ * KASLR needs some free space to relocate the kernel `.text`, `.data`, etc.
+ *
+ * Assuming we had just boot, just after `kinit`,
+ * we know the linked list contains all the available memory,
+ * one by one from end of physical memory to kernel end,
+ * i.e. this contiguous whole chunk of PA is recorded in reverse in `kmem`.
+ *
+ * Thus we may allocate contiguous pages of memory
+ * via modifying the linked list of PA directly.
+ *
+ * Return value:
+ * If these criteria are met,
+ *   - called only once per boot immediately following `kinit`
+ *   - `kalloc` yet ever been called
+ *   - queried contiguous chunk of memory lies within the free memory
+ * Then the queried chunk of memory would be returned.
+ *
+ * Else undefined.
+ */
+void *kaslr_alloc(uint64 pa_start, uint64 pages)
+{
+    static uint8 called = 0;
+    if ((!called) && (pa_start >= PGROUNDUP((uint64)kernel_end_marked_by_ld)) && (pages <= kmem.num_pages) &&
+        (0 == pa_start % PGSIZE))
+    {
+        called                             = 1;
+        struct kmem_linked_list_node *tail = ((const struct kmem_linked_list_node *)(void *)pa_start)->next;
+
+        if (((PHYSTOP - pa_start) / PGSIZE) > pages)
+        {
+            ((struct kmem_linked_list_node *)(void *)(pa_start + PGSIZE * pages))->next = tail;
+        }
+        else
+        {
+            kmem.free_pages = tail;
+        }
+
+        return (void *)pa_start;
+    }
+    else
+    {
+        panic((void *)__func__);
+        for (;;)
+        {
+        }
+    }
+    return 0;
+}
+
+/**
  * How many memory (in pages) are there?
  *
  * N.B. this function is protected by spinlock.

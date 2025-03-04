@@ -11,7 +11,8 @@
  */
 pagetable_t kernel_pagetable;
 
-extern char etext[]; // kernel.ld sets this to end of kernel code.
+extern const char etext[]; // kernel.ld sets this to end of kernel code.
+extern const char kernel_end_marked_by_ld[];
 
 extern char trampoline[]; // trampoline.S
 
@@ -65,18 +66,28 @@ static inline uint64 rnd64()
  */
 void kaslr(void)
 {
-    const uint64 free_ram_base        = PGROUNDUP((uint64)etext);
-    uint64       free_pages           = (PHYSTOP - free_ram_base) / PGSIZE;
-    uint64       kernel_size_in_pages = (free_ram_base - KERNBASE) / PGSIZE;
+    const uint64 free_ram_start       = PGROUNDUP((uint64)kernel_end_marked_by_ld);
+    uint64       free_pages           = (PHYSTOP - free_ram_start) / PGSIZE;
+    uint64       kernel_size_in_pages = (free_ram_start - KERNBASE) / PGSIZE;
     if (free_pages < kernel_size_in_pages)
     {
-        // kaslr without sufficient RAM is troublesome: need temporary space
-        // just don't do it since XV6 is already tiny,
-        // unless you want to port XV6 onto some physical RISC-V platform.
-        return;
+        /*
+         * kaslr without sufficient RAM is troublesome:
+         * we would need some temporary scratch workspace for moving things around.
+         *
+         * Just don't do it since XV6 is already tiny,
+         * unless you want to port XV6 onto some puny RISC-V platform.
+         */
+        kvminit();
     }
-
-    uint64 kaslr_pa_start = PGROUNDUP((uint64)etext) + PGSIZE * (rnd64() % (free_pages - kernel_size_in_pages + 1));
+    else
+    {
+        uint64 kaslr_pa_start = free_ram_start + PGSIZE * (rnd64() % (free_pages - kernel_size_in_pages + 1));
+        void (*const relocated_kvminit)(void) =
+            (void (*)(void))(void *)((((uint64)(void *)kvminit) - ((uint64)KERNBASE)) + kaslr_pa_start);
+        memmove(kaslr_alloc(kaslr_pa_start, kernel_size_in_pages), (void *)KERNBASE, kernel_size_in_pages * PGSIZE);
+        relocated_kvminit();
+    }
 
     // modify the linked list on it (see also `kinit` in `kernel/kalloc.c`)
     // note that the linked list goes backwards: head is last page.
@@ -115,18 +126,34 @@ pagetable_t kvmmake(void)
     return kpgtbl;
 }
 
-// Initialize the one kernel_pagetable
+/**
+ * Non-reentrant function: only called once after boot.
+ *
+ * Initialize the one `kernel_pagetable`
+ */
 void kvminit(void)
 {
     static uint8 kaslr_done = 0;
-    if (!kaslr_done)
+    switch (kaslr_done)
     {
+    case 0:
         // `kaslr` jumps to the relocated `kvminit` function,
         // thus assert the flag first, else we won't see it.
-        kaslr_done = 1;
+        kaslr_done += 1;
         kaslr();
+        break;
+    case 1:
+        kaslr_done += 1;
+        for (uint64 pa = KERNBASE; pa < PGROUNDUP((uint64)kernel_end_marked_by_ld); pa += PGSIZE)
+        {
+            kfree((void *)pa);
+        }
+        kernel_pagetable = kvmmake();
+        break;
+    default:
+        panic("`kvminit` is non-reentrant");
+        break;
     }
-    kernel_pagetable = kvmmake();
 }
 
 // Switch h/w page table register to the kernel's page table,

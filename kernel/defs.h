@@ -63,6 +63,7 @@ void ramdiskrw(struct buf *);
 void  *kalloc(void);
 void   kfree(void *);
 void   kinit(void);
+void  *kaslr_alloc(uint64, uint64);
 uint64 sys_get_free_pages(void);
 
 // log.c
