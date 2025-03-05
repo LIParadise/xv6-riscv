@@ -32,21 +32,11 @@ OBJS = \
   $K/plic.o \
   $K/virtio_disk.o
 
-# riscv64-unknown-elf- or riscv64-linux-gnu-
-# perhaps in /opt/riscv/bin
-# Try to infer the correct TOOLPREFIX if not set
-ifndef TOOLPREFIX
-TOOLPREFIX := $(shell if riscv64-unknown-elf-objdump -i 2>&1 | grep 'elf64-big' >/dev/null 2>&1; \
-	then echo 'riscv64-unknown-elf-'; \
-	elif riscv64-linux-gnu-objdump -i 2>&1 | grep 'elf64-big' >/dev/null 2>&1; \
-	then echo 'riscv64-linux-gnu-'; \
-	elif riscv64-unknown-linux-gnu-objdump -i 2>&1 | grep 'elf64-big' >/dev/null 2>&1; \
-	then echo 'riscv64-unknown-linux-gnu-'; \
-	else echo "***" 1>&2; \
-	echo "*** Error: Couldn't find a riscv64 version of GCC/binutils." 1>&2; \
-	echo "*** To turn off this error, run 'gmake TOOLPREFIX= ...'." 1>&2; \
-	echo "***" 1>&2; exit 1; fi)
-endif
+# BTW I use Arch
+TOOLPREFIX := riscv64-elf-
+# unfortunately both `riscv64-unknown-elf-gcc` and `riscv64-elf-gcc` doesn't support `ld -pie`
+# use that for GNU/Linux instead
+KLD := riscv64-linux-gnu-ld
 
 MAKEFLAGS := --jobs=$(shell nproc)
 QEMU = qemu-system-riscv64
@@ -74,17 +64,17 @@ CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 &
 LDFLAGS = -z max-page-size=4096
 
 $K/kernel: $(OBJS) $K/kernel.ld $U/initcode
-	$(LD) $(LDFLAGS) -pie -T $K/kernel.ld -o $K/kernel $(OBJS) 
+	$(KLD) $(LDFLAGS) -pie -T $K/kernel.ld -o $K/kernel $(OBJS) 
 	$(OBJDUMP) -S $K/kernel > $K/kernel.asm
 	$(OBJDUMP) -t $K/kernel | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $K/kernel.sym
 
 $(OBJS):
 	@if [ -f $*.c ]; then                                   \
-		cmd="$(CC) $(CFLAGS) -fpie -fpic -c -o $@ $*.c";    \
+		cmd="$(CC) $(CFLAGS) -fpic -shared -c -o $@ $*.c";  \
 		echo "$${cmd}";                                     \
 		eval "$${cmd}";                                     \
 	elif [ -f $*.S ]; then                                  \
-		cmd="$(CC) $(CFLAGS) -fpie -fpic -c -o $@ $*.S";    \
+		cmd="$(CC) $(CFLAGS) -fpic -shared -c -o $@ $*.S";  \
 		echo "$${cmd}";                                     \
 		eval "$${cmd}";                                     \
 	fi
