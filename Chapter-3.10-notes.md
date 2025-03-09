@@ -50,7 +50,9 @@ fn align_up(n: usize, alignment: usize) -> usize {
 }
 ```
 
-## KASLR (Kernel Address Space Layout Randomization)
+## About ASLR (Address Space Layout Randomization) and KASLR (Kernel Address Space Layout Randomization)
+
+The story dates back to shared libraries...
 
 ### [SO](https://unix.stackexchange.com/questions/512849/whats-inside-the-kernel-part-of-virtual-memory-of-64-bit-linux-processes#comment948570_512854)
 
@@ -78,6 +80,146 @@ fn align_up(n: usize, alignment: usize) -> usize {
 > ASLR in user space randomizes the location of various parts of an executable: stack, mmap region, heap, and the program text itself.
 
 > Cook's kernel ASLR (KASLR) currently only randomizes where the kernel code (i.e. text) is placed at boot time. KASLR "has to start somewhere", he said. In the future, randomizing additional regions is possible as well.
+
+### [redhat blog](https://www.redhat.com/en/blog/position-independent-executables-pie)
+
+> As the address of the symbol in memory is not a part of the main binary the loader adds a level of indirection in the procedure linkage table (the `.plt` section).
+
+### [SO difference between aslr and pie](https://stackoverflow.com/questions/54747917/difference-between-aslr-and-pie)
+
+> And even before that, even in real mode, we had segment registers. This enabled programmers to move thing basically everywhere they wanted with a 16-bytes granularity.
+
+> If a program is compiled without PIE its text and data sections cannot be relocated in memory, however, ASLR can be applied to the stack, heap, and dynamic libraries that it uses, such as libc.
+
+> One important caveat to this simple explanation is that Windows can apply ASLR to non-PIE executables by [embedding relocation information](https://stackoverflow.com/a/39216123/15675011) into the executable, and these relocations are resolved by the linker on the fly when the code is loaded into memory.
+
+### [SO on QEMU](https://stackoverflow.com/questions/58420670)
+
+### [SO on QEMU](https://stackoverflow.com/questions/55189463)
+
+### [memfault on linker scripts](https://interrupt.memfault.com/blog/how-to-write-linker-scripts-for-firmware)
+
+Note that before linking, `nm` may show some symbols like this: `00000000 T main`, and after linking it might become this: `00000294 T main`.
+
+Using `riscv` branch of XV6, we may again see this in action:
+
+``` bash
+$ riscv64-elf-nm kernel/main.o | grep main
+0000000000000000 T main
+$ riscv64-elf-nm kernel/kernel | grep main
+0000000080000e84 T main
+```
+
+> For example, it can generate debug information, garbage collect unused sections of code, or run **whole-program optimization (also known as Link-Time Optimization, or LTO)**. See also this [SO thread](https://stackoverflow.com/questions/3322911/what-do-linkers-do).
+
+> Code and data are bucketed into sections, which are contiguous areas of memory. There are no hard rules about how many sections you should have, or what they should be, but you typically want to put symbols in the same section if:
+>
+> 1. They should be in the same region of memory, or
+> 2. They need to be initialized together.
+
+> By convention, we name those sections as follow; see also [ELF spec](https://refspecs.linuxbase.org/elf/elf.pdf) for a full list, for some tools might fail in odd ways if you don't follow these rules.
+>
+> 1. `.text` for code and constants
+> 2. `.bss` for uninitialized data
+> 3. `.stack` for our stack
+> 4. `.data` for initialized data
+
+### [riscv-collab issue: Difference in ELF with PIE vs NOPIE](https://github.com/riscv-collab/riscv-gnu-toolchain/issues/905)
+
+> [Nelson1225 on May 24, 2021](https://github.com/riscv-collab/riscv-gnu-toolchain/issues/905#issuecomment-846682710)
+> I think the difference is how to solve the RELATIVE relocation.
+>
+> I remember that most of the targets used to encode the symbol values into GOT entries when enabling pie. So that when the dynamic linker (or elf loader) resolving the RELATIVE relocation, they will load the original symbol values from the got entries first, and then plus the load offset and restore the values back to the got entries. A total of one load and one store are required to resolve one RELATIVE relocation.
+>
+> But RISC-V encodes the symbol value to the addend of RELATIVE relocation directly, so it doesn’t matter whether or not the symbol value is written into got entry. Our dynamic linker will plus the load offset to the addend of RELATIVE relocation, and then store the value to got entries. Therefore, we only need one store when relocating one RELATIVE relocation, this should reduce the burdens of dynamic linker.
+> 
+> As I know, x86 uses the former method, so they should always encode the symbol values into got entries with or without pie. I’m not sure if it’s still the same now, since I haven’t seen the details in a while.
+
+### [technovelty](https://www.technovelty.org/linux/plt-and-got-the-key-to-code-sharing-and-dynamic-libraries.html)
+
+Shared libraries are meant to be shared among executables. This means there are two major things for OS/dynamic linker:
+
+1. Executables might well have different combinations of required shared libraries, loading them with arbitrary orders, thus they need to be position independent.
+  - An alternative is for the OS to assign each installed shared library a specific address, some call *prelinking*, but this is quickly unmanageable, and just don't work well with 32-bit systems due to smaller address spaces.
+2. Share code: since the library `.text` section are read-only, multiple executables might well share the exact same pages with the help from OS.
+  - As any other object file, there's accompanied `.data`: these cannot be shared across processes! Thus they'd need to be placed *relative* to the `.text` section.
+3. Based on aforementioned two requirements, shared libraries have to work disregard of the address it's loaded. Executables, however, need to assess the address during run time.
+
+For `i386`, due to the fact there's no way retriving PC directly, a hack dubbed *thunk* is often deployed: the `call` instruction automatically pushes the return address onto stack, and the thunk is simply copying whatever is on the stack, in this case basically PC, onto some register then return. Then we may do relative addressing as usual.
+
+As for how executables figure out where the symbols provided by dynamic libraries are, the `.got`/`.plt`/`.rela.dyn`/`.rela.plt` sections of the ELF are used.
+
+For plain values e.g. `extern int32_t provided_by_some_other_dynamic_lib;`, the access of the variable would go through some indirection, first do relative addressing to find the entry in `.got`, that entry is then used as address of `provided_by_some_other_dynamic_lib`. Who filled this entry and when? It's the dynamic loader examining **relocation sections** e.g. `.rela.dyn`: it contains various information about dynamically loaded symbols, e.g. name, type of the symbol (e.g. `R_X86_64_GLOB_DAT`), and most importantly after figuring out where that symbol lives, fill-in the `.got` entry with address of the symbol.
+
+For function calls, it's slightly more complicated (which makes the caller assembly slightly more elegant). An example would be more easy to explain.
+
+``` C
+int foo(void);
+int function(void) {
+    return foo();
+}
+```
+
+``` bash
+$ gcc -shared -fPIC -o libtest.so test.c
+$ objdump -S libtest.so | grep -A5 '<function>'
+0000000000001109 <function>:
+    1109:       55                      push   %rbp
+    110a:       48 89 e5                mov    %rsp,%rbp
+    110d:       e8 1e ff ff ff          call   1030 <foo@plt>
+    1112:       5d                      pop    %rbp
+    1113:       c3                      ret
+$ objdump -j .plt --disassemble-all libtest.so
+0000000000001020 <foo@plt-0x10>:
+    1020:       ff 35 ca 2f 00 00       push   0x2fca(%rip)        # 3ff0 <_GLOBAL_OFFSET_TABLE_+0x8>
+    1026:       ff 25 cc 2f 00 00       jmp    *0x2fcc(%rip)        # 3ff8 <_GLOBAL_OFFSET_TABLE_+0x10>
+    102c:       0f 1f 40 00             nopl   0x0(%rax)
+
+0000000000001030 <foo@plt>:
+    1030:       ff 25 ca 2f 00 00       jmp    *0x2fca(%rip)        # 4000 <foo@Base>
+    1036:       68 00 00 00 00          push   $0x0
+    103b:       e9 e0 ff ff ff          jmp    1020 <_init+0x20>
+$ objdump -j .got.plt --disassemble-all libtest.so
+0000000000003fe8 <_GLOBAL_OFFSET_TABLE_>:
+    3fe8:       08 3e                   or     %bh,(%rsi)
+        ...
+    3ffe:       00 00                   add    %al,(%rax)
+    4000:       36 10 00                ss adc %al,(%rax)
+    4003:       00 00                   add    %al,(%rax)
+    4005:       00 00                   add    %al,(%rax)
+        ...
+$ readelf --relocs libtest.so
+Relocation section '.rela.plt' at offset 0x520 contains 1 entry:
+  Offset          Info           Type           Sym. Value    Sym. Name + Addend
+000000004000  000300000007 R_X86_64_JUMP_SLO 0000000000000000 foo + 0
+```
+
+What happens here is when we see the dynamic call, we `call` with some address within `.plt` section, where the instructions just in turn jumps back to the next instruction which is `push $0x0`... wait what, we just jump around only to execute the next instruction? (the `ss adc` doesn't matter here: it's interpreted as operand for `jmp`, which is the next instruction (little Endian) `push $0x0`.)
+
+Well what would actually happen is **lazy binding** happening in the next few instructions: `.got` typically also contains an identifier and resolution function provided by the dynamic linker, and in the second `jmp` right after the `push $0x0`, we load the identifier name we're looking for (the function name) and call into the dynamic linker. The dynamic linker then has required information: we're `libtest.so` looking for function `foo`, then it would patch the `.got.plt` contents, s.t. next time we encounter the function we actually jump from callsite to `.plt` after which to the actual function, rather than falling back into the dynamic linker stub/helper.
+
+Note that we may change behavior of the identifier resolution stub with e.g. `LD_PRELOAD`, s.t. symbols would then have precedences.
+
+### [k3170makan introduction to elf format](https://blog.k3170makan.com/2018/11/introduction-to-elf-format-part-vii.html)
+
+## KASLR in XV6
+
+One may now realize that ASLR in general is not that easy a task to do: you shall not random all the way, else you might run into trouble growing memory, and most importantly you need a powerful ELF loader/dynamic linker s.t. they know where to find the symbols and how to modify the `.got`/`.got.plt` entries. Solving the relocations is a non-trivial task.
+
+Then how the heck could one implement KASLR on XV6? I mean coding a proper ELF loader that handles all the relocation/`.got`/`.got.plt` is probably already more complex than the XV6 kernel itself, and you have to do so since if you pass in the `-fpic`/`-fpie` options to the compiler (say `riscv64-elf-gcc` on Archlinux), the assembly code does contain lots of load from values in `_GLOBAL_OFFSET_TABLE_`/`_PROCEDURE_LINKAGE_TABLE_`, but the `.got`/`.got.plt` contain little values: if you run this (see also *GNU Make implicit rules*, don't forget to link with `-pie`), your program wouldn't even able to boot into supervisor mode, since all the indirections via `.got`/`.got.plt` are broken.
+
+It seems you **do** need a proper loader to do so, which QEMU doesn't provide.
+
+Except... you don't. No, you don't have to do all the relocations to resolve the `.got`/`.got.plt` on such a *__tiny__* kernel that may be compiled with `-mcmodel=medany`.
+
+[GCC manual for RISC-V](https://gcc.gnu.org/onlinedocs/gcc/RISC-V-Options.html)
+> `-mcmodel=medany`
+> Generate code for the medium-any code model. The program and its statically defined symbols must be within any single 2 GiB address range. Programs can be statically or dynamically linked.
+> The code generated by the medium-any code model is position-independent, but is not guaranteed to function correctly when linked into position-independent executables or libraries.
+
+Let's ignore the second part for a sec, and `grep jal kernel/kernel.asm | grep -v jalr`. Nothing. All jumps are already using relative address, if you remember to turn off the implicit Make rules.
+
+So on XV6 all we need is `-pie` flag to the linker, and the kernel is already KASLR-ready.
 
 ### Criticisms
 
@@ -135,6 +277,7 @@ Basically, always `/dev/urandom` unless you're on a device with low entropy and 
   - randomize the linked list behind `kalloc`?
     - no, this merely changes where the kernel page table tree lives in the physical memory, its VA-PA K-V mapping is still direct map
     - well ackchyually above is not the reason: again, what PA are responsible for what VA is not the point, it's what are where in in terms of VA.
+- How does the Linux kernel achieve KASLR without `-mcmodel=medany`? How does it handle all the relocations?
 - Why `uvmfree` (`kernel/vm.c`) tries to `kfree` pages starting from VA `0` given the size parameter non-zero? What are placed there in the user address space?
   - It's since the `exec` system call implementation of XV6 simply allocates all the `vaddr` plus required `memsz` as specified in each `ELF_PROG_LOAD` program header in the ELF header, from zero! (`kernel/exec.c`)
   - I.e. the XV6 allocates eagerly all the memory asked by the ELF, s.t. memory from user VA 0 till max in ELF header (probably some program header's `vaddr + memsz`).

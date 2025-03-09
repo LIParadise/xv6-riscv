@@ -16,83 +16,6 @@ extern const char kernel_end_marked_by_ld[];
 
 extern char trampoline[]; // trampoline.S
 
-/**
- * Naive PRNG implementation
- * Intended usage is for the HART zero to do KASLR upon boot.
- */
-static inline uint64 rnd64()
-{
-    // initial seed should be s.t. LSB equal to 1
-    // making sure upon the first call LFSR is already at work.
-    static uint64 linear_feedback_shift_register = 0X4269114514ACCEED;
-    static uint64 lfsr_feed                      = 0;
-
-    if (!lfsr_feed)
-    {
-        uint64 time = r_time();
-        uint32 prng = r_seed();
-        lfsr_feed   = time ^ prng ^ (((uint64)prng) << 32);
-    }
-
-    // https://www.reddit.com/r/RISCV/comments/1cy8zs2/comment/l597uu3
-    if (1 & linear_feedback_shift_register)
-    {
-        // LSB set
-        // let's do linear feedback shift
-        linear_feedback_shift_register = (linear_feedback_shift_register >> 1) ^ lfsr_feed;
-    }
-    else
-    {
-        // LSB not set,
-        // note that this is equivalent to rotate
-        linear_feedback_shift_register >>= 1;
-    }
-
-    return linear_feedback_shift_register;
-}
-
-/**
- * Copy all the kernel `.text`/`.data`/`.rodata` to some free memory,
- * put them into kernel allocator with `kfree`,
- * then jump to the new location.
- *
- * Kernel should be compiled with `-fno-pie` and linked with `-no-pie`.
- * Yeah the GNU compiler toolchain flags are not the most straightforward.
- *
- * This function is extremely unsafe:
- * it assumes and modifies the internal data structure of `kalloc`/`kfree` (linked lists),
- * and thus should be called only when other HARTs are not running,
- * also it assumes certain layout in `kernel/kernel.ld`, specifically it places `etext` marker for end of kernel.
- */
-void kaslr(void)
-{
-    const uint64 free_ram_start       = PGROUNDUP((uint64)kernel_end_marked_by_ld);
-    uint64       free_pages           = (PHYSTOP - free_ram_start) / PGSIZE;
-    uint64       kernel_size_in_pages = (free_ram_start - KERNBASE) / PGSIZE;
-    if (free_pages < kernel_size_in_pages)
-    {
-        /*
-         * kaslr without sufficient RAM is troublesome:
-         * we would need some temporary scratch workspace for moving things around.
-         *
-         * Just don't do it since XV6 is already tiny,
-         * unless you want to port XV6 onto some puny RISC-V platform.
-         */
-        kvminit();
-    }
-    else
-    {
-        uint64 kaslr_pa_start = free_ram_start + PGSIZE * (rnd64() % (free_pages - kernel_size_in_pages + 1));
-        void (*const relocated_kvminit)(void) =
-            (void (*)(void))(void *)((((uint64)(void *)kvminit) - ((uint64)KERNBASE)) + kaslr_pa_start);
-        memmove(kaslr_alloc(kaslr_pa_start, kernel_size_in_pages), (void *)KERNBASE, kernel_size_in_pages * PGSIZE);
-        relocated_kvminit();
-    }
-
-    // modify the linked list on it (see also `kinit` in `kernel/kalloc.c`)
-    // note that the linked list goes backwards: head is last page.
-}
-
 // Make a direct-map page table for the kernel.
 pagetable_t kvmmake(void)
 {
@@ -133,27 +56,7 @@ pagetable_t kvmmake(void)
  */
 void kvminit(void)
 {
-    static uint8 kaslr_done = 0;
-    switch (kaslr_done)
-    {
-    case 0:
-        // `kaslr` jumps to the relocated `kvminit` function,
-        // thus assert the flag first, else we won't see it.
-        kaslr_done += 1;
-        kaslr();
-        break;
-    case 1:
-        kaslr_done += 1;
-        for (uint64 pa = KERNBASE; pa < PGROUNDUP((uint64)kernel_end_marked_by_ld); pa += PGSIZE)
-        {
-            kfree((void *)pa);
-        }
-        kernel_pagetable = kvmmake();
-        break;
-    default:
-        panic("`kvminit` is non-reentrant");
-        break;
-    }
+    kernel_pagetable = kvmmake();
 }
 
 // Switch h/w page table register to the kernel's page table,

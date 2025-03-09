@@ -1,3 +1,6 @@
+#include <stdatomic.h>
+#include <stdbool.h>
+
 struct buf;
 struct context;
 struct file;
@@ -62,8 +65,7 @@ void ramdiskrw(struct buf *);
 // kalloc.c
 void  *kalloc(void);
 void   kfree(void *);
-void   kinit(void);
-void  *kaslr_alloc(uint64, uint64);
+void   kinit_kaslr(void (*(*))(void), atomic_bool *, atomic_uint_fast8_t *);
 uint64 sys_get_free_pages(void);
 
 // log.c
@@ -129,6 +131,7 @@ void initsleeplock(struct sleeplock *, char *);
 // string.c
 int   memcmp(const void *, const void *, uint);
 void *memmove(void *, const void *, uint);
+void  memcpy(void *restrict, const void *restrict, uint64);
 void *memset(void *, int, uint);
 char *safestrcpy(char *, const char *, int);
 int   strlen(const char *);
