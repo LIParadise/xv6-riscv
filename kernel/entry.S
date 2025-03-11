@@ -13,6 +13,12 @@ _entry:
         li a0, 1024*4
         # `csrr`: control status register read
         csrr a1, mhartid
+
+        # enable `seed` to be used in supervisor mode
+        csrr a2, mseccfg
+        ori a2, a2, 0x200
+        csrrw x0, mseccfg, a2
+
         addi a1, a1, 1
         mul a0, a0, a1
         add sp, sp, a0

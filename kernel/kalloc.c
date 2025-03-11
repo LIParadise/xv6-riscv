@@ -120,6 +120,7 @@ void kinit_kaslr(fp_void_to_void *relocated_main, atomic_bool *kaslr_done,
     uint64 kaslr_offset, ra, sp;
     /* store the return address for later we shall return to relocated kernel */
     __asm__ volatile("addi %0, ra, 0x0" : "=r"(ra));
+    __asm__ volatile("addi %0, sp, 0x0" : "=r"(sp));
 
     kaslr_offset = kinit_kaslr_worker();
     if (0 == kaslr_offset)
@@ -140,15 +141,12 @@ void kinit_kaslr(fp_void_to_void *relocated_main, atomic_bool *kaslr_done,
     /*
      * Hack stored `ra` on `sp`,
      * s.t. we don't return to the original kernel (which would later be repurposed as free memory).
-     * `88` comes from inspecting the assembly: check RISC-V calling conventions!
+     * `104` comes from inspecting the assembly: check RISC-V calling conventions!
      *
-     * Directly calling `"sd %0, 88(sd)"` somehow won't compile, so another register is used.
+     * Directly calling `"sd %0, 104(sd)"` somehow won't compile, so another register is used.
      * Luckily the resulting assembly doesn't introduce yet another move of `sp`.
      */
-    __asm__ volatile("addi %0, sp    , 0x0\n"
-                     "sd   %1, 88(%0)     \n"
-                     : "=r"(sp)
-                     : "r"(ra));
+    __asm__ volatile("sd %0, 104(%1)" : : "r"(ra), "r"(sp));
 
     return;
 }
