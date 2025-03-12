@@ -64,9 +64,8 @@ void main()
                  * it should set to 1 less than `NCPU`.
                  */
             }
-            void (*relocated_main_)(void) = relocated_main;
             atomic_fetch_sub_explicit(&cpus_yet_jumped_to_relocated_main, 1, memory_order_release);
-            relocated_main_();
+            relocated_main();
         }
     }
 

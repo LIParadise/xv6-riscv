@@ -11,6 +11,8 @@
 
 static void freerange(void *pa_start, const void *pa_end);
 static void free_range_exclude_subrange(void *pa_start, void *pa_end, const void *const, const uint64);
+#define KASLR_RA_OFFSET_FROM_SP                      "104"
+#define FIXME_READ_DTS_INSTEAD_OF_HARDCODE_QEMU_CPUS (3u)
 
 /**
  * first address after kernel,
@@ -30,7 +32,7 @@ struct
         uint64                        num_pages;
 } kmem;
 
-typedef void (*fp_void_to_void)(void);
+typedef void (*fp_void_to_void)();
 
 /**
  * Naive PRNG implementation
@@ -127,9 +129,10 @@ void kinit_kaslr(fp_void_to_void *relocated_main, atomic_bool *kaslr_done,
     {
         panic("I don't want to handle KASLR corner case i.e. insufficient RAM for now...");
     }
-    extern fp_void_to_void main;
-    *relocated_main = main + kaslr_offset;
-    atomic_store_explicit(cpus_yet_jumped_to_relocated_main, NCPU - 1, memory_order_release);
+    extern void main();
+    *relocated_main = (void *)(((uint64)(void *)main) + kaslr_offset);
+    atomic_store_explicit(cpus_yet_jumped_to_relocated_main, FIXME_READ_DTS_INSTEAD_OF_HARDCODE_QEMU_CPUS - 1,
+                          memory_order_release);
     atomic_store_explicit((atomic_bool *)(void *)(((uint64)(void *)kaslr_done) + kaslr_offset), true,
                           memory_order_release);
 
@@ -141,12 +144,12 @@ void kinit_kaslr(fp_void_to_void *relocated_main, atomic_bool *kaslr_done,
     /*
      * Hack stored `ra` on `sp`,
      * s.t. we don't return to the original kernel (which would later be repurposed as free memory).
-     * `104` comes from inspecting the assembly: check RISC-V calling conventions!
+     * `KASLR_RA_OFFSET_FROM_SP` comes from inspecting the assembly: check RISC-V calling conventions!
      *
-     * Directly calling `"sd %0, 104(sd)"` somehow won't compile, so another register is used.
+     * Directly calling `"sd %0, KASLR_RA_OFFSET_FROM_SP(sp)"` somehow won't compile, so another register is used.
      * Luckily the resulting assembly doesn't introduce yet another move of `sp`.
      */
-    __asm__ volatile("sd %0, 104(%1)" : : "r"(ra), "r"(sp));
+    __asm__ volatile("sd %0, " KASLR_RA_OFFSET_FROM_SP "(%1)" : : "r"(ra), "r"(sp));
 
     return;
 }
