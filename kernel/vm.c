@@ -16,8 +16,11 @@ extern const char kernel_end_marked_by_ld[];
 
 extern char trampoline[]; // trampoline.S
 
-// Make a direct-map page table for the kernel.
-pagetable_t kvmmake(void)
+/**
+ * Make a direct-map page table for the kernel.
+ * FIXME: KASLR
+ */
+pagetable_t kvmmake(const uintptr_t kaslr_offset)
 {
     pagetable_t kpgtbl;
 
@@ -33,14 +36,24 @@ pagetable_t kvmmake(void)
     // PLIC
     kvmmap(kpgtbl, PLIC, PLIC, 0x4000000, PTE_R | PTE_W);
 
-    // map kernel text executable and read-only.
-    kvmmap(kpgtbl, KERNBASE, KERNBASE, (uint64)etext - KERNBASE, PTE_R | PTE_X);
+    // KASLR: repurpose/reclaim memory occupied by old kernel,
+    // after which map them as regular memory
+    //
+    // N.B. compiler/linker should make this call a relative jump (`-static-pie`),
+    // thus no need to take KASLR relocation offset into account here
+    freerange((void *)(uintptr_t)KERNBASE, (const void *)(uintptr_t)etext);
+    kvmmap(kpgtbl, KERNBASE, KERNBASE, (uint64)etext - KERNBASE, PTE_R | PTE_W);
+
+    // map KASLR relocated kernel text executable and read-only.
+    kvmmap(kpgtbl, kaslr_offset + KERNBASE, kaslr_offset + KERNBASE, (uint64)etext - KERNBASE, PTE_R | PTE_X);
 
     // map kernel data and the physical RAM we'll make use of.
+    // TODO: map with KASLR taken into account
     kvmmap(kpgtbl, (uint64)etext, (uint64)etext, PHYSTOP - (uint64)etext, PTE_R | PTE_W);
 
     // map the trampoline for trap entry/exit to
     // the highest virtual address in the kernel.
+    // TODO: KASLR
     kvmmap(kpgtbl, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
 
     // allocate and map a kernel stack for each process.
@@ -57,9 +70,9 @@ pagetable_t kvmmake(void)
  * FIXME
  * should map the relocated pages instead of hardcoded pages
  */
-void kvminit(void)
+void kvminit(const uintptr_t kaslr_offset)
 {
-    kernel_pagetable = kvmmake();
+    kernel_pagetable = kvmmake(kaslr_offset);
 }
 
 // Switch h/w page table register to the kernel's page table,

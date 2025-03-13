@@ -8,7 +8,7 @@
 
 static atomic_bool         started              = false;
 static atomic_bool         kaslr_done           = false;
-static uint64              kaslr_offset         = 0;
+static uintptr_t           kaslr_offset         = 0;
 static atomic_uint_fast8_t harts_yet_done_kaslr = 0;
 
 #define kaslr_hack_sp()                                                      \
@@ -40,18 +40,18 @@ void main()
          */
         kaslr_hack_sp();
         /* TODO: free the old RAM */
-        kvminit();          // create kernel page table
-        kvminithart();      // turn on paging
-        procinit();         // process table
-        trapinit();         // trap vectors
-        trapinithart();     // install kernel trap vector
-        plicinit();         // set up interrupt controller
-        plicinithart();     // ask PLIC for device interrupts
-        binit();            // buffer cache
-        iinit();            // inode table
-        fileinit();         // file table
-        virtio_disk_init(); // emulated hard disk
-        userinit();         // first user process
+        kvminit(kaslr_offset); // create kernel page table
+        kvminithart();         // turn on paging
+        procinit();            // process table
+        trapinit();            // trap vectors
+        trapinithart();        // install kernel trap vector
+        plicinit();            // set up interrupt controller
+        plicinithart();        // ask PLIC for device interrupts
+        binit();               // buffer cache
+        iinit();               // inode table
+        fileinit();            // file table
+        virtio_disk_init();    // emulated hard disk
+        userinit();            // first user process
         atomic_store_explicit(&started, true, memory_order_release);
     }
     else

@@ -64,8 +64,10 @@ void ramdiskintr(void);
 void ramdiskrw(struct buf *);
 
 // kalloc.c
+uint64 krnd64();
 void  *kalloc(void);
 void   kfree(void *);
+void   freerange(void *pa_start, const void *pa_end);
 void   kinit_kaslr(uint64 *const, atomic_bool *const, atomic_uint_fast8_t *const);
 uint64 sys_get_free_pages(void);
 
@@ -162,7 +164,7 @@ void uartputc_sync(int);
 int  uartgetc(void);
 
 // vm.c
-void        kvminit(void);
+void        kvminit(const uintptr_t);
 void        kvminithart(void);
 void        kvmmap(pagetable_t, uint64, uint64, uint64, int);
 int         mappages(pagetable_t, const uint64, const uint64, const uint64, const int);
@@ -193,3 +195,7 @@ void virtio_disk_intr(void);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x) / sizeof((x)[0]))
+
+/* `typeof` is C23 */
+#define GENERIC_PTR_SHIFT(ptr_type, ptr, offset)                             \
+    ((ptr_type)(void *)(((uintptr_t)(void *)(ptr)) + ((uintptr_t)(offset))))

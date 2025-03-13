@@ -10,12 +10,11 @@
 #include "defs.h"
 #include <stdatomic.h>
 
-static void freerange(void *pa_start, const void *pa_end);
 static void free_range_exclude_subrange(void *pa_start, void *pa_end, const void *const, const uint64);
+
+/* check compiled assembly for safety */
 #define KASLR_RA_OFFSET_FROM_SP                      "104"
 #define FIXME_READ_DTS_INSTEAD_OF_HARDCODE_QEMU_CPUS (3u)
-/* `typeof` is C23 */
-#define GENERIC_PTR_SHIFT(ptr_type, ptr, offset) ((ptr_type)(void *)(((uintptr_t)(void *)ptr) + ((uintptr_t)offset)))
 
 /**
  * first address after kernel,
@@ -35,11 +34,10 @@ struct
         uint64                        num_pages;
 } kmem;
 
-/**
- * Naive PRNG implementation
- * Intended usage is for the HART zero to do KASLR upon boot.
+/*
+ * TODO: move it to separate module since it's not really `kalloc` related
  */
-static uint64 krnd64()
+uint64 krnd64()
 {
     // initial seed should be s.t. LSB equal to 1
     // making sure upon the first call LFSR is already at work.
@@ -71,7 +69,7 @@ static uint64 krnd64()
 }
 
 /**
- * Free the physical pages, except some of which would be KASLR relocated kernel.
+ * Free the physical pages, except some of which would be skipped for they contain KASLR relocated kernel.
  *
  * Return the how much offset we moved the kernel during KASLR:
  * zero if too few memory to make KASLR work, kernel not moved,
@@ -122,7 +120,7 @@ static uintptr_t kinit_kaslr_worker()
  * KASLR and populate (most) of the memory.
  * In particular the pages occupied by the initial kernel are not yet reclaimed.
  */
-void kinit_kaslr(uint64 *const p_kaslr_offset, atomic_bool *const kaslr_done,
+void kinit_kaslr(uintptr_t *const p_kaslr_offset, atomic_bool *const kaslr_done,
                  atomic_uint_fast8_t *const harts_yet_done_kaslr)
 {
     uint64 kaslr_offset, ra, sp;
@@ -137,8 +135,8 @@ void kinit_kaslr(uint64 *const p_kaslr_offset, atomic_bool *const kaslr_done,
     }
 
     /* second copy for we HART 0 also need to modify stack pointer later */
-    *p_kaslr_offset                                            = kaslr_offset;
-    *GENERIC_PTR_SHIFT(uint64 *, p_kaslr_offset, kaslr_offset) = kaslr_offset;
+    *p_kaslr_offset                                               = kaslr_offset;
+    *GENERIC_PTR_SHIFT(uintptr_t *, p_kaslr_offset, kaslr_offset) = kaslr_offset;
 
     /* prepare flags before signaling other HARTs it's ok to jump */
     atomic_uint_fast8_t *relocated_hydk = GENERIC_PTR_SHIFT(atomic_uint_fast8_t *, harts_yet_done_kaslr, kaslr_offset);
@@ -170,7 +168,7 @@ void kinit_kaslr(uint64 *const p_kaslr_offset, atomic_bool *const kaslr_done,
     return;
 }
 
-static void freerange(void *pa_start, const void *pa_end)
+void freerange(void *pa_start, const void *pa_end)
 {
     char *p;
     p = (char *)PGROUNDUP((uint64)pa_start);
