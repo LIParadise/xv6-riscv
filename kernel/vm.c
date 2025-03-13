@@ -53,6 +53,9 @@ pagetable_t kvmmake(void)
  * Non-reentrant function: only called once after boot.
  *
  * Initialize the one `kernel_pagetable`
+ *
+ * FIXME
+ * should map the relocated pages instead of hardcoded pages
  */
 void kvminit(void)
 {

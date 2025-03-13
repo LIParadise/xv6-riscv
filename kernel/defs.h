@@ -1,4 +1,5 @@
 #include <stdatomic.h>
+#include <stdint.h>
 #include <stdbool.h>
 
 struct buf;
@@ -65,7 +66,7 @@ void ramdiskrw(struct buf *);
 // kalloc.c
 void  *kalloc(void);
 void   kfree(void *);
-void   kinit_kaslr(void (*(*))(void), atomic_bool *, atomic_uint_fast8_t *);
+void   kinit_kaslr(uint64 *const, atomic_bool *const, atomic_uint_fast8_t *const);
 uint64 sys_get_free_pages(void);
 
 // log.c

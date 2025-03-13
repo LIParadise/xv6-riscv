@@ -8,11 +8,14 @@
 #include "spinlock.h"
 #include "riscv.h"
 #include "defs.h"
+#include <stdatomic.h>
 
 static void freerange(void *pa_start, const void *pa_end);
 static void free_range_exclude_subrange(void *pa_start, void *pa_end, const void *const, const uint64);
 #define KASLR_RA_OFFSET_FROM_SP                      "104"
 #define FIXME_READ_DTS_INSTEAD_OF_HARDCODE_QEMU_CPUS (3u)
+/* `typeof` is C23 */
+#define GENERIC_PTR_SHIFT(ptr_type, ptr, offset) ((ptr_type)(void *)(((uintptr_t)(void *)ptr) + ((uintptr_t)offset)))
 
 /**
  * first address after kernel,
@@ -31,8 +34,6 @@ struct
         struct kmem_linked_list_node *free_pages;
         uint64                        num_pages;
 } kmem;
-
-typedef void (*fp_void_to_void)();
 
 /**
  * Naive PRNG implementation
@@ -76,7 +77,7 @@ static uint64 krnd64()
  * zero if too few memory to make KASLR work, kernel not moved,
  * non-zero if KASLR worked, and we may later free the space occupied by old kernel.
  */
-static uint64 kinit_kaslr_worker()
+static uintptr_t kinit_kaslr_worker()
 {
     initlock(&kmem.lock, "kmem");
 
@@ -98,7 +99,8 @@ static uint64 kinit_kaslr_worker()
     }
     else
     {
-        kaslr_start = (void *)(free_ram_start + PGSIZE * (krnd64() % (free_pages - kernel_size_in_pages + 1)));
+        kaslr_start =
+            GENERIC_PTR_SHIFT(void *, free_ram_start, PGSIZE *(krnd64() % (free_pages - kernel_size_in_pages + 1)));
         free_range_exclude_subrange(kernel_end_marked_by_ld, (void *)PHYSTOP, kaslr_start, kernel_size_in_pages);
         /* copy kernel only after the allocator initialization! */
         memcpy(kaslr_start, (void *)KERNBASE, kernel_size_in_pages * PGSIZE);
@@ -112,12 +114,16 @@ static uint64 kinit_kaslr_worker()
          * > nor even that a pointer produced through a round-trip cast can be meaningfully dereferenced in any way
          * whatsoever.
          */
-        return ((uint64)kaslr_start) - ((uint64)KERNBASE);
+        return ((uintptr_t)kaslr_start) - ((uintptr_t)KERNBASE);
     }
 }
 
-void kinit_kaslr(fp_void_to_void *relocated_main, atomic_bool *kaslr_done,
-                 atomic_uint_fast8_t *cpus_yet_jumped_to_relocated_main)
+/**
+ * KASLR and populate (most) of the memory.
+ * In particular the pages occupied by the initial kernel are not yet reclaimed.
+ */
+void kinit_kaslr(uint64 *const p_kaslr_offset, atomic_bool *const kaslr_done,
+                 atomic_uint_fast8_t *const harts_yet_done_kaslr)
 {
     uint64 kaslr_offset, ra, sp;
     /* store the return address for later we shall return to relocated kernel */
@@ -129,26 +135,36 @@ void kinit_kaslr(fp_void_to_void *relocated_main, atomic_bool *kaslr_done,
     {
         panic("I don't want to handle KASLR corner case i.e. insufficient RAM for now...");
     }
-    extern void main();
-    *relocated_main = (void *)(((uint64)(void *)main) + kaslr_offset);
-    atomic_store_explicit(cpus_yet_jumped_to_relocated_main, FIXME_READ_DTS_INSTEAD_OF_HARDCODE_QEMU_CPUS - 1,
-                          memory_order_release);
-    atomic_store_explicit((atomic_bool *)(void *)(((uint64)(void *)kaslr_done) + kaslr_offset), true,
-                          memory_order_release);
 
-    while (0 != atomic_load_explicit(cpus_yet_jumped_to_relocated_main, memory_order_acquire))
+    /* second copy for we HART 0 also need to modify stack pointer later */
+    *p_kaslr_offset                                            = kaslr_offset;
+    *GENERIC_PTR_SHIFT(uint64 *, p_kaslr_offset, kaslr_offset) = kaslr_offset;
+
+    /* prepare flags before signaling other HARTs it's ok to jump */
+    atomic_uint_fast8_t *relocated_hydk = GENERIC_PTR_SHIFT(atomic_uint_fast8_t *, harts_yet_done_kaslr, kaslr_offset);
+    atomic_bool         *relocated_kd   = GENERIC_PTR_SHIFT(atomic_bool *, kaslr_done, kaslr_offset);
+    atomic_store_explicit(relocated_kd, true, memory_order_release);
+    atomic_store_explicit(relocated_hydk, FIXME_READ_DTS_INSTEAD_OF_HARDCODE_QEMU_CPUS - 1, memory_order_release);
+    atomic_store_explicit(harts_yet_done_kaslr, FIXME_READ_DTS_INSTEAD_OF_HARDCODE_QEMU_CPUS - 1, memory_order_release);
+
+    while (0 != atomic_load_explicit(relocated_hydk, memory_order_acquire))
     {
-        /* wait for other HART to jump to relocated main */
+        /*
+         * Wait for other HARTs till they are notified where to jump and had changed their stack pointer:
+         * we're gonna repurpose the memory where original kernel used to live later.
+         * Every byte counts!
+         */
     }
 
     /*
      * Hack stored `ra` on `sp`,
      * s.t. we don't return to the original kernel (which would later be repurposed as free memory).
-     * `KASLR_RA_OFFSET_FROM_SP` comes from inspecting the assembly: check RISC-V calling conventions!
+     * `KASLR_RA_OFFSET_FROM_SP` comes from inspecting the assembly: check RISC-V calling conventions and asm!
      *
-     * Directly calling `"sd %0, KASLR_RA_OFFSET_FROM_SP(sp)"` somehow won't compile, so another register is used.
-     * Luckily the resulting assembly doesn't introduce yet another move of `sp`.
+     * Directly calling `"sd %0, KASLR_RA_OFFSET_FROM_SP(sp)"` somehow won't compile,
+     * so another register is used.
      */
+    ra += kaslr_offset;
     __asm__ volatile("sd %0, " KASLR_RA_OFFSET_FROM_SP "(%1)" : : "r"(ra), "r"(sp));
 
     return;
@@ -172,7 +188,7 @@ static void free_range_exclude_subrange(void *pa_start, void *pa_end, const void
                                         const uint64 kernel_size_in_pages)
 {
     freerange(pa_start, kaslr_start);
-    freerange((void *)(kaslr_start + kernel_size_in_pages * PGSIZE), pa_end);
+    freerange(GENERIC_PTR_SHIFT(void *, kaslr_start, kernel_size_in_pages *PGSIZE), pa_end);
 }
 
 /**

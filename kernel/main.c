@@ -6,10 +6,16 @@
 #include "riscv.h"
 #include "defs.h"
 
-static atomic_bool started                                   = false;
-static atomic_bool kaslr_done                                = false;
-void (*relocated_main)(void)                                 = 0;
-static atomic_uint_fast8_t cpus_yet_jumped_to_relocated_main = 0;
+static atomic_bool         started              = false;
+static atomic_bool         kaslr_done           = false;
+static uint64              kaslr_offset         = 0;
+static atomic_uint_fast8_t harts_yet_done_kaslr = 0;
+
+#define kaslr_hack_sp()                                                      \
+    do                                                                       \
+    {                                                                        \
+        __asm__ volatile("add sp, %0, sp" : : "r"(kaslr_offset) : "memory"); \
+    } while (0)
 
 // start() jumps here in supervisor mode on all CPUs.
 void main()
@@ -22,11 +28,18 @@ void main()
         printf("xv6 kernel is booting\n");
         printf("\n");
 
-        // physical page allocator, also KASLR
-        // internally handles RA s.t. it won't return here, but relocated version of the `main` function
-        kinit_kaslr(&relocated_main, &kaslr_done, &cpus_yet_jumped_to_relocated_main);
-        /* TODO: free the old RAM */
+        /*
+         * physical page allocator, also KASLR
+         * internally handles `ra` s.t. it won't return here, but relocated version of the `main` function
+         */
+        kinit_kaslr(&kaslr_offset, &kaslr_done, &harts_yet_done_kaslr);
 
+        /*
+         * After KASLR, HART 0 "returns" here: it had hacked its `ra`.
+         * Set the `sp` to the new location before reclaiming the old RAM.
+         */
+        kaslr_hack_sp();
+        /* TODO: free the old RAM */
         kvminit();          // create kernel page table
         kvminithart();      // turn on paging
         procinit();         // process table
@@ -45,10 +58,20 @@ void main()
     {
         if (atomic_load_explicit(&kaslr_done, memory_order_acquire))
         {
-            /* we're in relocated kernel */
+            /*
+             * We're in relocated kernel.
+             * Modify stack pointer since main thread is gonna reclaim those memory.
+             */
+            kaslr_hack_sp();
+            /*
+             * HART 0 should have set this value to 1 less than exact number of HARTs on the system.
+             * Notify HART 0 we've relocated and set stack pointer,
+             * s.t. it may reclaim the memory occupied by original kernel at will.
+             */
+            atomic_fetch_sub_explicit(&harts_yet_done_kaslr, 1, memory_order_release);
             while (!atomic_load_explicit(&started, memory_order_acquire))
             {
-                /* wait for misc start tasks by HART 0 */
+                /* wait for other misc initialization tasks by HART 0 */
             }
             printf("hart %d starting\n", cpuid());
             kvminithart();  // turn on paging
@@ -57,14 +80,11 @@ void main()
         }
         else
         {
-            while (0 == atomic_load_explicit(&cpus_yet_jumped_to_relocated_main, memory_order_acquire))
+            while (0 == atomic_load_explicit(&harts_yet_done_kaslr, memory_order_acquire))
             {
-                /*
-                 * wait for HART 0 to prepare KASLR `relocated_main`:
-                 * it should set to 1 less than `NCPU`.
-                 */
+                /* wait for HART 0 to prepare KASLR `kaslr_offset` */
             }
-            atomic_fetch_sub_explicit(&cpus_yet_jumped_to_relocated_main, 1, memory_order_release);
+            void (*relocated_main)(void) = (void *)(((uint64)(void *)main) + kaslr_offset);
             relocated_main();
         }
     }
