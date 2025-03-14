@@ -41,17 +41,17 @@ void main()
         kaslr_hack_sp();
         /* TODO: free the old RAM */
         kvminit(kaslr_offset); // create kernel page table
-        kvminithart();         // turn on paging
-        procinit();            // process table
-        trapinit();            // trap vectors
-        trapinithart();        // install kernel trap vector
-        plicinit();            // set up interrupt controller
-        plicinithart();        // ask PLIC for device interrupts
-        binit();               // buffer cache
-        iinit();               // inode table
-        fileinit();            // file table
-        virtio_disk_init();    // emulated hard disk
-        userinit();            // first user process
+        kvminithart();      // turn on paging
+        procinit();         // process table
+        trapinit();         // trap vectors
+        trapinithart();     // install kernel trap vector
+        plicinit();         // set up interrupt controller
+        plicinithart();     // ask PLIC for device interrupts
+        binit();            // buffer cache
+        iinit();            // inode table
+        fileinit();         // file table
+        virtio_disk_init(); // emulated hard disk
+        userinit();         // first user process
         atomic_store_explicit(&started, true, memory_order_release);
     }
     else

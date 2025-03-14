@@ -11,7 +11,14 @@
  */
 pagetable_t kernel_pagetable;
 
-extern const char etext[]; // kernel.ld sets this to end of kernel code.
+/**
+ * kernel.ld sets this to end of kernel `.text` (page aligned).
+ */
+extern const char etext[];
+/**
+ * kernel.ld sets this to end of kernel `.text`, `.data`, and `.rodata`.
+ * Not aligned.
+ */
 extern const char kernel_end_marked_by_ld[];
 
 extern char trampoline[]; // trampoline.S
@@ -38,22 +45,20 @@ pagetable_t kvmmake(const uintptr_t kaslr_offset)
 
     // KASLR: repurpose/reclaim memory occupied by old kernel,
     // after which map them as regular memory
-    //
-    // N.B. compiler/linker should make this call a relative jump (`-static-pie`),
-    // thus no need to take KASLR relocation offset into account here
-    freerange((void *)(uintptr_t)KERNBASE, (const void *)(uintptr_t)etext);
-    kvmmap(kpgtbl, KERNBASE, KERNBASE, (uint64)etext - KERNBASE, PTE_R | PTE_W);
+    printf("debug: KASLR offset %lu\n", kaslr_offset);
+    freerange((void *)(uintptr_t)KERNBASE, (const void *)(uintptr_t)kernel_end_marked_by_ld);
+    kvmmap(kpgtbl, KERNBASE, KERNBASE, kaslr_offset, PTE_R | PTE_W);
 
     // map KASLR relocated kernel text executable and read-only.
     kvmmap(kpgtbl, kaslr_offset + KERNBASE, kaslr_offset + KERNBASE, (uint64)etext - KERNBASE, PTE_R | PTE_X);
 
     // map kernel data and the physical RAM we'll make use of.
-    // TODO: map with KASLR taken into account
-    kvmmap(kpgtbl, (uint64)etext, (uint64)etext, PHYSTOP - (uint64)etext, PTE_R | PTE_W);
+    kvmmap(kpgtbl, kaslr_offset + (uintptr_t)etext, kaslr_offset + (uintptr_t)etext,
+           (uintptr_t)PHYSTOP - (kaslr_offset + (uintptr_t)etext), PTE_R | PTE_W);
 
     // map the trampoline for trap entry/exit to
     // the highest virtual address in the kernel.
-    // TODO: KASLR
+    // TODO do we need to KASLR the trampoline, too?
     kvmmap(kpgtbl, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
 
     // allocate and map a kernel stack for each process.
