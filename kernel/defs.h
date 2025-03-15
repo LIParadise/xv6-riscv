@@ -197,5 +197,7 @@ void virtio_disk_intr(void);
 #define NELEM(x) (sizeof(x) / sizeof((x)[0]))
 
 /* `typeof` is C23 */
-#define GENERIC_PTR_SHIFT(ptr_type, ptr, offset)                             \
+#define GENERIC_PTR_ADD(ptr_type, ptr, offset)                             \
     ((ptr_type)(void *)(((uintptr_t)(void *)(ptr)) + ((uintptr_t)(offset))))
+#define GENERIC_PTR_SUB(ptr_type, ptr, offset)                             \
+    ((ptr_type)(void *)(((uintptr_t)(void *)(ptr)) - ((uintptr_t)(offset))))

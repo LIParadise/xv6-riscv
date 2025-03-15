@@ -25,7 +25,19 @@ extern char trampoline[]; // trampoline.S
 
 /**
  * Make a direct-map page table for the kernel.
- * FIXME: KASLR
+ *
+ * The KASLR offset is kinda tricky here:
+ * we compiled with `-static-pie` and linked with `-pie` and `--no-dynamic-linker`,
+ * s.t. all the symbols are resolved using relative addresses directedly encoded in asm,
+ * s.t. no dynamic linker is required as loading.
+ *
+ * This has a side-effect, though:
+ * all the `.data`/`.rodata` are also accessed by code in `.text` via relative addressing,
+ * in fact the same treatment applies to also the linker defined (`PROVIDE`) symbols.
+ *
+ * In our KASLR implementation, when we're in this function,
+ * the KASLR had been done and we're in relocated kernel,
+ * in particular they are offset!
  */
 pagetable_t kvmmake(const uintptr_t kaslr_offset)
 {
@@ -45,20 +57,21 @@ pagetable_t kvmmake(const uintptr_t kaslr_offset)
 
     // KASLR: repurpose/reclaim memory occupied by old kernel,
     // after which map them as regular memory
-    printf("debug: KASLR offset %lu\n", kaslr_offset);
-    freerange((void *)(uintptr_t)KERNBASE, (const void *)(uintptr_t)kernel_end_marked_by_ld);
+    printf("debug: KASLR offset %lu, pages %lu\n", kaslr_offset, sys_get_free_pages());
+    freerange((void *)(uintptr_t)KERNBASE,
+              GENERIC_PTR_SUB(void *, PGROUNDUP((uintptr_t)kernel_end_marked_by_ld), kaslr_offset));
+    printf("debug: KASLR offset %lu, pages %lu\n", kaslr_offset, sys_get_free_pages());
     kvmmap(kpgtbl, KERNBASE, KERNBASE, kaslr_offset, PTE_R | PTE_W);
 
     // map KASLR relocated kernel text executable and read-only.
-    kvmmap(kpgtbl, kaslr_offset + KERNBASE, kaslr_offset + KERNBASE, (uint64)etext - KERNBASE, PTE_R | PTE_X);
+    kvmmap(kpgtbl, kaslr_offset + KERNBASE, kaslr_offset + KERNBASE, (uint64)etext - (kaslr_offset + KERNBASE),
+           PTE_R | PTE_X);
 
     // map kernel data and the physical RAM we'll make use of.
-    kvmmap(kpgtbl, kaslr_offset + (uintptr_t)etext, kaslr_offset + (uintptr_t)etext,
-           (uintptr_t)PHYSTOP - (kaslr_offset + (uintptr_t)etext), PTE_R | PTE_W);
+    kvmmap(kpgtbl, (uintptr_t)etext, (uintptr_t)etext, (uintptr_t)PHYSTOP - (uintptr_t)etext, PTE_R | PTE_W);
 
     // map the trampoline for trap entry/exit to
     // the highest virtual address in the kernel.
-    // TODO do we need to KASLR the trampoline, too?
     kvmmap(kpgtbl, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
 
     // allocate and map a kernel stack for each process.

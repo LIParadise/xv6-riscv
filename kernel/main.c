@@ -22,36 +22,41 @@ void main()
 {
     if (cpuid() == 0)
     {
+        /*
+         * physical page allocator, also KASLR
+         * internally handles `ra` s.t. it won't return here, but relocated version of the `main` function
+         *
+         * N.B.
+         * Done early s.t. most kernel data structure e.g. `struct spinlock` would be initialized
+         * with data right from relocated `.data`/`.rodata`.
+         * In particular, this way we only need to handle the `struct spinlock` of kernel memory allocator.
+         */
+        kinit_kaslr(&kaslr_offset, &kaslr_done, &harts_yet_done_kaslr);
+        /*
+         * After KASLR, HART 0 "returns" here: it had hacked its `ra`.
+         * Set the `sp` to the new location before reclaiming the old RAM.
+         */
+        kaslr_hack_sp();
+
         consoleinit();
         printfinit();
         printf("\n");
         printf("xv6 kernel is booting\n");
         printf("\n");
 
-        /*
-         * physical page allocator, also KASLR
-         * internally handles `ra` s.t. it won't return here, but relocated version of the `main` function
-         */
-        kinit_kaslr(&kaslr_offset, &kaslr_done, &harts_yet_done_kaslr);
-
-        /*
-         * After KASLR, HART 0 "returns" here: it had hacked its `ra`.
-         * Set the `sp` to the new location before reclaiming the old RAM.
-         */
-        kaslr_hack_sp();
         /* TODO: free the old RAM */
         kvminit(kaslr_offset); // create kernel page table
-        kvminithart();      // turn on paging
-        procinit();         // process table
-        trapinit();         // trap vectors
-        trapinithart();     // install kernel trap vector
-        plicinit();         // set up interrupt controller
-        plicinithart();     // ask PLIC for device interrupts
-        binit();            // buffer cache
-        iinit();            // inode table
-        fileinit();         // file table
-        virtio_disk_init(); // emulated hard disk
-        userinit();         // first user process
+        kvminithart();         // turn on paging
+        procinit();            // process table
+        trapinit();            // trap vectors
+        trapinithart();        // install kernel trap vector
+        plicinit();            // set up interrupt controller
+        plicinithart();        // ask PLIC for device interrupts
+        binit();               // buffer cache
+        iinit();               // inode table
+        fileinit();            // file table
+        virtio_disk_init();    // emulated hard disk
+        userinit();            // first user process
         atomic_store_explicit(&started, true, memory_order_release);
     }
     else

@@ -13,7 +13,7 @@
 static void free_range_exclude_subrange(void *pa_start, void *pa_end, const void *const, const uint64);
 
 /* check compiled assembly for safety */
-#define KASLR_RA_OFFSET_FROM_SP                      "104"
+#define KASLR_RA_OFFSET_FROM_SP                      "88"
 #define FIXME_READ_DTS_INSTEAD_OF_HARDCODE_QEMU_CPUS (3u)
 
 /**
@@ -21,6 +21,8 @@ static void free_range_exclude_subrange(void *pa_start, void *pa_end, const void
  * defined by `kernel/kernel.ld`
  */
 extern char kernel_end_marked_by_ld[];
+extern char rela_dyn_start[];
+extern char rela_dyn_end[];
 
 struct kmem_linked_list_node
 {
@@ -33,6 +35,31 @@ struct
         struct kmem_linked_list_node *free_pages;
         uint64                        num_pages;
 } kmem;
+
+struct rela_dyn
+{
+        uintptr_t symbol_address;
+        union rela_type_t {
+                uintptr_t __not_used_merely_for_alignment;
+                /* https://ithelp.ithome.com.tw/articles/10196982 */
+                enum rela_type_inner_t
+                {
+                    R_RISCV_NONE         = 0,  /* No relocation. */
+                    R_RISCV_32           = 1,  /* Add 32 bit zero extended symbol value */
+                    R_RISCV_64           = 2,  /* Add 64 bit symbol value. */
+                    R_RISCV_RELATIVE     = 3,  /* Add load address of shared object. */
+                    R_RISCV_COPY         = 4,  /* Copy data from shared object. */
+                    R_RISCV_JUMP_SLOT    = 5,  /* Set GOT entry to code address. */
+                    R_RISCV_TLS_DTPMOD32 = 6,  /* 32 bit ID of module containing symbol */
+                    R_RISCV_TLS_DTPMOD64 = 7,  /* ID of module containing symbol */
+                    R_RISCV_TLS_DTPREL32 = 8,  /* 32 bit relative offset in TLS block */
+                    R_RISCV_TLS_DTPREL64 = 9,  /* Relative offset in TLS block */
+                    R_RISCV_TLS_TPREL32  = 10, /* 32 bit relative offset in static TLS block */
+                    R_RISCV_TLS_TPREL64  = 11, /* Relative offset in static TLS block */
+                } rela_type_inner;
+        } rela_type;
+        uintptr_t symbol_value;
+};
 
 /*
  * TODO: move it to separate module since it's not really `kalloc` related
@@ -98,21 +125,55 @@ static uintptr_t kinit_kaslr_worker()
     else
     {
         kaslr_start =
-            GENERIC_PTR_SHIFT(void *, free_ram_start, PGSIZE *(krnd64() % (free_pages - kernel_size_in_pages + 1)));
+            GENERIC_PTR_ADD(void *, free_ram_start, PGSIZE *(krnd64() % (free_pages - kernel_size_in_pages + 1)));
         free_range_exclude_subrange(kernel_end_marked_by_ld, (void *)PHYSTOP, kaslr_start, kernel_size_in_pages);
         /* copy kernel only after the allocator initialization! */
         memcpy(kaslr_start, (void *)KERNBASE, kernel_size_in_pages * PGSIZE);
-        /*
-         * Technically UB here:
-         * Should've use `uintptr_t`; C99 defines it as integer s.t. `void *` -> `uintptr_t` -> `void *` is valid
-         *
-         * https://stackoverflow.com/a/57280960/25255815
-         * > All that is guaranteed about conversions is that `(void*)p==(void*)(uintptr_t)p`.
-         * > There isn't guarantee that `(uintptr_t)p == (uintptr_t)p`,
-         * > nor even that a pointer produced through a round-trip cast can be meaningfully dereferenced in any way
-         * whatsoever.
-         */
-        return ((uintptr_t)kaslr_start) - ((uintptr_t)KERNBASE);
+        const uintptr_t kaslr_offset = ((uintptr_t)kaslr_start) - ((uintptr_t)KERNBASE);
+        {
+            /*
+             * In general,
+             * KASLR means the kernel has to somehow replicate most of the functionalities of a loader/dynamic linker,
+             * specifically the relocations, if any, need to be resolved,
+             * or better, just produce position independent code without any relocations.
+             *
+             * With compiler option `-static-pie` and linker `--no-dynamic-linker` and `-pie`,
+             * we've avoided much of the work of a loader/dynamic linker,
+             * but still, some relocations still need to be done,
+             * in particular according to `readelf -r`, `.rela.dyn` is all we need for XV6.
+             *
+             * This is due to function pointers,
+             * in particular the `syscalls` (`kernel/syscall.c`) array of function pointers:
+             * either you left them all empty (and rely on loader reading `.rela.dyn` and resolve them while loading),
+             * or you hardcode the addresses of the functions in,
+             * either way we still need to resolve them.
+             *
+             * In fact `-mcmodel=medany` without `-pie`/`-static-pie`/`--no-dynamic-linker` i.e. the default
+             * option of XV6 is already basically position independent, as documented in GCC compiler option,
+             * however it too faces the fact that `syscalls` is hardcoded thus need to be adjusted.
+             */
+            for (const struct rela_dyn *p = (void *)rela_dyn_start; p < (struct rela_dyn *)(void *)rela_dyn_end; ++p)
+            {
+                if (R_RISCV_RELATIVE == p->rela_type.rela_type_inner)
+                {
+                    *GENERIC_PTR_ADD(void **, p->symbol_address, kaslr_offset) =
+                        GENERIC_PTR_ADD(void *, p->symbol_value, kaslr_offset);
+                }
+                else
+                {
+                    panic("I don't know how to handle `.rela.dyn` other than `R_RISCV_RELATIVE`...");
+                }
+            }
+
+            /*
+             * Need to modify the lock for its pointee would got tainted after KASLR done
+             * since we would later reclaim the pages on which the original kernel lives.
+             * We're the only running HART now (HART 0), so re-init lock is fine.
+             */
+            initlock(GENERIC_PTR_ADD(struct spinlock *, &kmem.lock, kaslr_offset),
+                     GENERIC_PTR_ADD(char *, "kmem", kaslr_offset));
+        }
+        return kaslr_offset;
     }
 }
 
@@ -135,12 +196,12 @@ void kinit_kaslr(uintptr_t *const p_kaslr_offset, atomic_bool *const kaslr_done,
     }
 
     /* second copy for we HART 0 also need to modify stack pointer later */
-    *p_kaslr_offset                                               = kaslr_offset;
-    *GENERIC_PTR_SHIFT(uintptr_t *, p_kaslr_offset, kaslr_offset) = kaslr_offset;
+    *p_kaslr_offset                                             = kaslr_offset;
+    *GENERIC_PTR_ADD(uintptr_t *, p_kaslr_offset, kaslr_offset) = kaslr_offset;
 
     /* prepare flags before signaling other HARTs it's ok to jump */
-    atomic_uint_fast8_t *relocated_hydk = GENERIC_PTR_SHIFT(atomic_uint_fast8_t *, harts_yet_done_kaslr, kaslr_offset);
-    atomic_bool         *relocated_kd   = GENERIC_PTR_SHIFT(atomic_bool *, kaslr_done, kaslr_offset);
+    atomic_uint_fast8_t *relocated_hydk = GENERIC_PTR_ADD(atomic_uint_fast8_t *, harts_yet_done_kaslr, kaslr_offset);
+    atomic_bool         *relocated_kd   = GENERIC_PTR_ADD(atomic_bool *, kaslr_done, kaslr_offset);
     atomic_store_explicit(relocated_kd, true, memory_order_release);
     atomic_store_explicit(relocated_hydk, FIXME_READ_DTS_INSTEAD_OF_HARDCODE_QEMU_CPUS - 1, memory_order_release);
     atomic_store_explicit(harts_yet_done_kaslr, FIXME_READ_DTS_INSTEAD_OF_HARDCODE_QEMU_CPUS - 1, memory_order_release);
@@ -186,7 +247,7 @@ static void free_range_exclude_subrange(void *pa_start, void *pa_end, const void
                                         const uint64 kernel_size_in_pages)
 {
     freerange(pa_start, kaslr_start);
-    freerange(GENERIC_PTR_SHIFT(void *, kaslr_start, kernel_size_in_pages *PGSIZE), pa_end);
+    freerange(GENERIC_PTR_ADD(void *, kaslr_start, kernel_size_in_pages *PGSIZE), pa_end);
 }
 
 /**
@@ -211,7 +272,7 @@ void kfree(void *pa)
 {
     struct kmem_linked_list_node *r;
 
-    if (((uint64)pa % PGSIZE) != 0 || (char *)pa < kernel_end_marked_by_ld || (uint64)pa >= PHYSTOP)
+    if (((uint64)pa % PGSIZE) != 0 || (uint64)pa >= PHYSTOP)
     {
         panic("kfree");
     }
