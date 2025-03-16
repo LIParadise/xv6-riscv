@@ -281,9 +281,11 @@ void uvmfirst(pagetable_t pagetable, uchar *src, uint sz)
     mem = kalloc();
     memset(mem, 0, PGSIZE);
     mappages(pagetable, 0, PGSIZE, (uint64)mem, PTE_W | PTE_R | PTE_X | PTE_U);
-    // why not `memcpy`? `kalloc` shall not give out aliased pages...
-    // well we don't have C standard library to link to.
-    memmove(mem, src, sz);
+
+    // this function is only used during boot,
+    // and source is `initcode.S` assembly from kernel `.data`,
+    // so no aliasing shall ever occur: `kmem` shall not contain kernel code/data.
+    memcpy(mem, src, sz);
 }
 
 // Allocate PTEs and physical memory to grow process from oldsz to
@@ -372,14 +374,23 @@ void freewalk(pagetable_t pagetable)
 
 /**
  * Free user memory pages, then free page-table pages.
+ *
+ * See also `proc_freepagetable` in `kernel/proc.c`:
+ * it handles the trampoline and trapframe,
+ * and we care only about the user memory (`PTE_U`).
  */
 void uvmfree(pagetable_t pagetable, uint64 sz)
 {
     if (sz > 0)
     {
         /*
-         * This is how much we kernel had given out in `exec`:
-         * XV6 isn't the best in either space efficiency or speed.
+         * This is how much we kernel had given to the process
+         * (exclude trampoline and trapframe):
+         * XV6 isn't the best in either functionality, space efficiency, or speed,
+         * as it always puts `.text` at process VA 0,
+         * and eagerly create every page the process had asked for (no CoW).
+         *
+         * In turn, freeing the PTE leaves is as simple as this one single call.
          */
         uvmunmap(pagetable, 0, PGROUNDUP(sz) / PGSIZE, 1);
     }

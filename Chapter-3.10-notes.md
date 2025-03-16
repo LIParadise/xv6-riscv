@@ -261,6 +261,16 @@ Maybe also feed the value over some hash algorithms!
 
 Basically, always `/dev/urandom` unless you're on a device with low entropy and just booted, or you need a _information theoretic secure one-time pad_; for the latter, maybe you know better than this anyway.
 
+## System Call `exec` and User Processes in XV6
+
+The `kstack` field of each `struct proc` is set early during boot in `proc_mapstacks` in `kvmmake`, and never unset during XV6 lifetime.
+The `trapframe` is a page allocated on process start and deallocated on process dead, *unique* to that instantce of process: it caches registers representing the state of that process.
+The `trampoline` is a (shared) physical page that's mapped as read only and not accessible to user space in high VA for each process for entering the kernel. In XV6, similar to `trapframe`, it's mapped/unmapped at the beginning/end of lifetime of an instance of a process. Though we don't really need to unmap it, no?
+
+Upon initialize of a generic process, aside from its page table (in which contain `trampoline` at `TRAMPOLINE` and `trapframe` at `TRAPFRAME` which does *not* contribute to process size btw), kernel stack `kstack`, and PID, the only interesting thing that got initialized is the `ra` field of `context` field of `struct proc` pointing to `forkret` (`kernel/proc.c`) and `sp` pointing to *end* of `kstack` of that process.
+
+For the first process `initcode`/`init`, two other fields are initialized: the `epc` in its `trapframe` set to zero for user program counter, whereas the `sp` in its `trapframe` set to `PGSIZE` for user stack pointer.
+
 # Questions
 
 - Why `sfence.vma` twice when `kvminithart`? In particular, why `sfence.vma` after chaing `satp`, how are there any stale entries if we just flushed it?
@@ -290,3 +300,4 @@ Basically, always `/dev/urandom` unless you're on a device with low entropy and 
 - Why `myproc` twice in `exec` system call? (`kernel/exec.c`)
   - Seems to be related to possible scheduling due to `end_op` (`kernel/log.c` and `kernel/virtio_disk.c`), this call may change CPU
   - But we're pointing to the global fixed array of process table, right? Then we should not really care?
+- Why user process `trampoline` is mapped/unmapped at birth/death of process, unlike `kstack` which is mapped till XV6 itself dies? Seems like a job that's unnecessarily done multiple times...

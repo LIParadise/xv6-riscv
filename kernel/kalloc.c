@@ -315,7 +315,7 @@ void kfree(void *pa)
  * the memory given out from here never aliases.
  *
  * Return value is zero if cannot be allocated,
- * else it's pointer intended for kernel's own usage.
+ * else it's PA/kernel direct VA, filled with junk.
  */
 void *kalloc(void)
 {
