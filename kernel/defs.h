@@ -70,6 +70,7 @@ void   kfree(void *);
 void   freerange(void *pa_start, const void *pa_end);
 void   kinit_kaslr(uint64 *const, atomic_bool *const, atomic_uint_fast8_t *const);
 uint64 sys_get_free_pages(void);
+bool   kmem_sane_check(void);
 
 // log.c
 void initlog(int, struct superblock *);
@@ -197,7 +198,11 @@ void virtio_disk_intr(void);
 #define NELEM(x) (sizeof(x) / sizeof((x)[0]))
 
 /* `typeof` is C23 */
-#define GENERIC_PTR_ADD(ptr_type, ptr, offset)                             \
-    ((ptr_type)(void *)(((uintptr_t)(void *)(ptr)) + ((uintptr_t)(offset))))
-#define GENERIC_PTR_SUB(ptr_type, ptr, offset)                             \
-    ((ptr_type)(void *)(((uintptr_t)(void *)(ptr)) - ((uintptr_t)(offset))))
+#define GENERIC_PTR_ADD(ptr_type, ptr, offset) ((ptr_type)(void *)(((uintptr_t)(void *)(ptr)) + ((uintptr_t)(offset))))
+#define GENERIC_PTR_SUB(ptr_type, ptr, offset) ((ptr_type)(void *)(((uintptr_t)(void *)(ptr)) - ((uintptr_t)(offset))))
+/* Given a pointer that's supposed to be of certain type, ensure this is the case by adjust upwards */
+#define ALIGN_UP(ptr_type, ptr)                                                                    \
+    ((1 >= sizeof(*(ptr_type)(void *)0))                                                           \
+         ? ((ptr_type)(void *)ptr)                                                                 \
+         : ((ptr_type)((uintptr_t)GENERIC_PTR_ADD(void *, ptr, sizeof(*(ptr_type)(void *)0) - 1) / \
+                       sizeof(*(ptr_type)(void *)0) * sizeof(*(ptr_type)(void *)0))))

@@ -21,7 +21,15 @@ static void free_range_exclude_subrange(void *pa_start, void *pa_end, const void
  * defined by `kernel/kernel.ld`
  */
 extern char kernel_end_marked_by_ld[];
+/**
+ * defined by `kernel/kernel.ld`,
+ * where does `.rela.dyn` start?
+ */
 extern char rela_dyn_start[];
+/**
+ * defined by `kernel/kernel.ld`,
+ * where does `.rela.dyn` end?
+ */
 extern char rela_dyn_end[];
 
 struct kmem_linked_list_node
@@ -38,9 +46,9 @@ struct
 
 struct rela_dyn
 {
-        uintptr_t symbol_address;
+        void *symbol_address;
         union rela_type_t {
-                uintptr_t __not_used_merely_for_alignment;
+                void *__not_used_merely_for_alignment;
                 /* https://ithelp.ithome.com.tw/articles/10196982 */
                 enum rela_type_inner_t
                 {
@@ -58,7 +66,7 @@ struct rela_dyn
                     R_RISCV_TLS_TPREL64  = 11, /* Relative offset in static TLS block */
                 } rela_type_inner;
         } rela_type;
-        uintptr_t symbol_value;
+        void *symbol_value;
 };
 
 /*
@@ -127,7 +135,15 @@ static uintptr_t kinit_kaslr_worker()
         kaslr_start =
             GENERIC_PTR_ADD(void *, free_ram_start, PGSIZE *(krnd64() % (free_pages - kernel_size_in_pages + 1)));
         free_range_exclude_subrange(kernel_end_marked_by_ld, (void *)PHYSTOP, kaslr_start, kernel_size_in_pages);
-        /* copy kernel only after the allocator initialization! */
+        if (!kmem_sane_check())
+        {
+            panic("kmem insane: kinit_kaslr (1st)");
+        }
+        if (!kmem_sane_check())
+        {
+            panic("kmem insane: kinit_kaslr (2nd)");
+        }
+        /* copy kernel only after the allocator initialization: we want the data present in relocated kernel! */
         memcpy(kaslr_start, (void *)KERNBASE, kernel_size_in_pages * PGSIZE);
         const uintptr_t kaslr_offset = ((uintptr_t)kaslr_start) - ((uintptr_t)KERNBASE);
         {
@@ -135,22 +151,24 @@ static uintptr_t kinit_kaslr_worker()
              * In general,
              * KASLR means the kernel has to somehow replicate most of the functionalities of a loader/dynamic linker,
              * specifically the relocations, if any, need to be resolved,
-             * or better, just produce position independent code without any relocations.
+             * of course, if possible, just produce position independent code without any relocations.
              *
              * With compiler option `-static-pie` and linker `--no-dynamic-linker` and `-pie`,
              * we've avoided much of the work of a loader/dynamic linker,
              * but still, some relocations still need to be done,
              * in particular according to `readelf -r`, `.rela.dyn` is all we need for XV6.
              *
-             * This is due to function pointers,
+             * The main roadblock is due to pointers e.g. function pointers,
              * in particular the `syscalls` (`kernel/syscall.c`) array of function pointers:
              * either you left them all empty (and rely on loader reading `.rela.dyn` and resolve them while loading),
              * or you hardcode the addresses of the functions in,
              * either way we still need to resolve them.
              *
+             * There's simply no "relative pointer" in C.
+             *
              * In fact `-mcmodel=medany` without `-pie`/`-static-pie`/`--no-dynamic-linker` i.e. the default
              * option of XV6 is already basically position independent, as documented in GCC compiler option,
-             * however it too faces the fact that `syscalls` is hardcoded thus need to be adjusted.
+             * however it too faces the fact that `syscalls` is hardcoded addresses thus need to be adjusted.
              */
             for (const struct rela_dyn *p = (void *)rela_dyn_start; p < (struct rela_dyn *)(void *)rela_dyn_end; ++p)
             {
@@ -278,7 +296,7 @@ void kfree(void *pa)
     }
 
     // Fill with junk to catch dangling refs.
-    memset(pa, 1, PGSIZE);
+    memset(pa, -1, PGSIZE);
 
     r = (struct kmem_linked_list_node *)pa;
 
@@ -332,4 +350,51 @@ uint64 sys_get_free_pages(void)
     ret = kmem.num_pages;
     release(&kmem.lock);
     return ret;
+}
+
+/**
+ * Basic sane check of memory allocator:
+ * no pages shall appear twice in the allocator.
+ */
+bool kmem_sane_check(void)
+{
+    bool sanity = true;
+    acquire(&kmem.lock);
+
+    uint64                        actual_pages = 0;
+    struct kmem_linked_list_node *node         = kmem.free_pages;
+    while (node)
+    {
+        uint64_t *tag = ALIGN_UP(uint64_t *, GENERIC_PTR_ADD(void *, node, sizeof(struct kmem_linked_list_node)));
+        if ((uint64_t)(-1) == *tag)
+        {
+            // `kfree` sets the memory to all `1`; mark as walked.
+            *tag = actual_pages++;
+            node = node->next;
+        }
+        else
+        {
+            sanity = false;
+            break;
+        }
+    }
+
+    if (sanity && actual_pages == kmem.num_pages)
+    {
+        // recover the original setup only if the allocator is OK,
+        // since we shall panic if it's not OK anyway.
+        for (node = kmem.free_pages; node; node = node->next)
+        {
+            *ALIGN_UP(uint64_t *, GENERIC_PTR_ADD(void *, node, sizeof(struct kmem_linked_list_node))) = (uint64_t)(-1);
+        }
+    }
+    else
+    {
+        printf("sanity: %d\n", sanity);
+        printf("claimed pages %lu, actual_pages %lu\n", kmem.num_pages, actual_pages);
+        sanity = false;
+    }
+
+    release(&kmem.lock);
+    return sanity;
 }
