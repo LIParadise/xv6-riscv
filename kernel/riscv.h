@@ -305,6 +305,17 @@ static inline void sfence_vma()
     __asm__ volatile("sfence.vma zero, zero");
 }
 
+/**
+ * Get some entropy via the `seed` CSR.
+ * Note that this is actually unprivileged.
+ */
+static inline uint32 r_seed()
+{
+    uint32 ret;
+    __asm__ volatile("csrrw %0, seed, x0" : "=r"(ret));
+    return ret;
+}
+
 typedef uint64  pte_t;
 typedef uint64 *pagetable_t; // 512 PTEs
 
@@ -334,8 +345,18 @@ typedef uint64 *pagetable_t; // 512 PTEs
 #define PXSHIFT(level) (PGSHIFT + (9 * (level)))
 #define PX(level, va)  ((((uint64)(va)) >> PXSHIFT(level)) & PXMASK)
 
-// one beyond the highest possible virtual address.
-// MAXVA is actually one bit less than the max allowed by
-// Sv39, to avoid having to sign-extend virtual addresses
-// that have the high bit set.
+/**
+ * One beyond the highest possible virtual address.
+ *
+ * RISC-V specifies that for Sv39, among the `0..=63` bits,
+ * the `0..=38` 39 bits are used for addressing,
+ * and `39..=63` **must** equal to bit 38,
+ * else page fault follows.
+ *
+ * XV6 intentionally uses only the 38 bits instead of 39 allowed by Sv39,
+ * s.t. we don't have to sign-extend the higher bits.
+ *
+ * See also
+ * The RISC-V Instruction Set Manual: Volume II
+ */
 #define MAXVA (1L << (9 + 9 + 9 + 12 - 1))

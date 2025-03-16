@@ -51,10 +51,21 @@ void *memmove(void *dst, const void *src, uint n)
     return dst;
 }
 
-// memcpy exists to placate GCC.  Use memmove.
-void *memcpy(void *dst, const void *src, uint n)
+/**
+ * DIY `memcpy`, except the return value isn't first argument.
+ */
+void memcpy(void *restrict dst, const void *restrict src, uint64 n)
 {
-    return memmove(dst, src, n);
+    char       *d = dst;
+    const char *s = src;
+    while (n-- >= 1)
+    {
+        /*
+         * unpriv-isa-asciidoc.pdf
+         * RISC-V doesn't produce exceptions when integer arithmetics over/under-flow.
+         */
+        *d++ = *s++;
+    }
 }
 
 int strncmp(const char *p, const char *q, uint n)
