@@ -22,13 +22,19 @@ SECTIONS
     PROVIDE(etext = .);
   }
 
+  .rela.dyn : {
+    PROVIDE(rela_dyn_start = .);
+  }
+
   .rodata : {
+    PROVIDE(rela_dyn_end = .);
     . = ALIGN(16);
     *(.srodata .srodata.*) /* do not need to distinguish this from .rodata */
     . = ALIGN(16);
     *(.rodata .rodata.*)
+    . = ALIGN(16);
   }
-
+  
   .data : {
     . = ALIGN(16);
     *(.sdata .sdata.*) /* do not need to distinguish this from .data */

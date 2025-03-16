@@ -312,7 +312,7 @@ static inline void sfence_vma()
 static inline uint32 r_seed()
 {
     uint32 ret;
-    __asm__ volatile("csrrw %0, seed, %0" : "=r"(ret));
+    __asm__ volatile("csrrw %0, seed, x0" : "=r"(ret));
     return ret;
 }
 

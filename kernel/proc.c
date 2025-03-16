@@ -26,9 +26,13 @@ extern char trampoline[]; // trampoline.S
 // must be acquired before any p->lock.
 struct spinlock wait_lock;
 
-// Allocate a page for each process's kernel stack.
-// Map it high in memory, followed by an invalid
-// guard page.
+/**
+ * Allocate a page for each process's kernel stack.
+ * Map it high in memory, followed by an invalid
+ * guard page.
+ *
+ * TODO: KASLR
+ */
 void proc_mapstacks(pagetable_t kpgtbl)
 {
     struct proc *p;
@@ -677,8 +681,8 @@ int either_copyin(void *dst, int user_src, uint64 src, uint64 len)
 // No lock to avoid wedging a stuck machine further.
 void procdump(void)
 {
-    static char *states[] = {[UNUSED] "unused",   [USED] "used",      [SLEEPING] "sleep ",
-                             [RUNNABLE] "runble", [RUNNING] "run   ", [ZOMBIE] "zombie"};
+    static char *states[] = {[UNUSED] = "unused",   [USED] = "used",       [SLEEPING] = "sleep",
+                             [RUNNABLE] = "runble", [RUNNING] = "running", [ZOMBIE] = "zombie"};
     struct proc *p;
     char        *state;
 

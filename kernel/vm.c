@@ -11,45 +11,35 @@
  */
 pagetable_t kernel_pagetable;
 
-extern char etext[]; // kernel.ld sets this to end of kernel code.
+/**
+ * kernel.ld sets this to end of kernel `.text` (page aligned).
+ */
+extern const char etext[];
+/**
+ * kernel.ld sets this to end of kernel `.text`, `.data`, and `.rodata`.
+ * Not aligned.
+ */
+extern const char kernel_end_marked_by_ld[];
 
 extern char trampoline[]; // trampoline.S
 
 /**
- * Naive PRNG implementation
- * Intended usage is upon boot, the first HART may use it to do KASLR.
+ * Make a direct-map page table for the kernel.
+ *
+ * The KASLR offset is kinda tricky here:
+ * we compiled with `-static-pie` and linked with `-pie` and `--no-dynamic-linker`,
+ * s.t. all the symbols are resolved using relative addresses directedly encoded in asm,
+ * s.t. no dynamic linker is required as loading.
+ *
+ * This has a side-effect, though:
+ * all the `.data`/`.rodata` are also accessed by code in `.text` via relative addressing,
+ * in fact the same treatment applies to also the linker defined (`PROVIDE`) symbols.
+ *
+ * In our KASLR implementation, when we're in this function,
+ * the KASLR had been done and we're in relocated kernel,
+ * in particular they are offset!
  */
-static inline uint64 get_rnd()
-{
-    static uint64 lfsr_feed                      = 0;
-    static uint64 linear_feedback_shift_register = 0X4269ACCEED114514;
-    if (!lfsr_feed)
-    {
-        // arbitrary chosen shift for the initial values
-        uint64 time = r_time();
-        uint32 prng = r_seed();
-        lfsr_feed   = time ^ prng ^ (((uint64)prng) << 32);
-    }
-
-    // https://www.reddit.com/r/RISCV/comments/1cy8zs2/comment/l597uu3
-    if (1 & linear_feedback_shift_register)
-    {
-        // LSB set
-        // let's do linear feedback shift
-        linear_feedback_shift_register = (linear_feedback_shift_register >> 1) ^ lfsr_feed;
-    }
-    else
-    {
-        // LSB not set,
-        // note that this is equivalent to rotate
-        linear_feedback_shift_register >>= 1;
-    }
-
-    return linear_feedback_shift_register;
-}
-
-// Make a direct-map page table for the kernel.
-pagetable_t kvmmake(void)
+pagetable_t kvmmake(const uintptr_t kaslr_offset)
 {
     pagetable_t kpgtbl;
 
@@ -65,11 +55,32 @@ pagetable_t kvmmake(void)
     // PLIC
     kvmmap(kpgtbl, PLIC, PLIC, 0x4000000, PTE_R | PTE_W);
 
-    // map kernel text executable and read-only.
-    kvmmap(kpgtbl, KERNBASE, KERNBASE, (uint64)etext - KERNBASE, PTE_R | PTE_X);
+    {
+        // KASLR: repurpose/reclaim memory occupied by old kernel,
+        // after which map them as regular memory
+        printf("debug: KASLR offset %lu == 0x%llx, pages %lu\n", kaslr_offset, (unsigned long long)kaslr_offset,
+               sys_get_free_pages());
+        freerange((void *)(uintptr_t)KERNBASE,
+                  GENERIC_PTR_SUB(void *, PGROUNDUP((uintptr_t)kernel_end_marked_by_ld), kaslr_offset));
+        if (!kmem_sane_check())
+        {
+            panic("kmem insane: kvmmake (1st)");
+        }
+        if (!kmem_sane_check())
+        {
+            panic("kmem insane: kvmmake (2nd)");
+        }
+        printf("debug: KASLR offset %lu == 0x%llx, pages %lu\n", kaslr_offset, (unsigned long long)kaslr_offset,
+               sys_get_free_pages());
+    }
+    kvmmap(kpgtbl, KERNBASE, KERNBASE, kaslr_offset, PTE_R | PTE_W);
+
+    // map KASLR relocated kernel text executable and read-only.
+    kvmmap(kpgtbl, kaslr_offset + KERNBASE, kaslr_offset + KERNBASE, (uint64)etext - (kaslr_offset + KERNBASE),
+           PTE_R | PTE_X);
 
     // map kernel data and the physical RAM we'll make use of.
-    kvmmap(kpgtbl, (uint64)etext, (uint64)etext, PHYSTOP - (uint64)etext, PTE_R | PTE_W);
+    kvmmap(kpgtbl, (uintptr_t)etext, (uintptr_t)etext, (uintptr_t)PHYSTOP - (uintptr_t)etext, PTE_R | PTE_W);
 
     // map the trampoline for trap entry/exit to
     // the highest virtual address in the kernel.
@@ -81,10 +92,17 @@ pagetable_t kvmmake(void)
     return kpgtbl;
 }
 
-// Initialize the one kernel_pagetable
-void kvminit(void)
+/**
+ * Non-reentrant function: only called once after boot.
+ *
+ * Initialize the one `kernel_pagetable`
+ *
+ * FIXME
+ * should map the relocated pages instead of hardcoded pages
+ */
+void kvminit(const uintptr_t kaslr_offset)
 {
-    kernel_pagetable = kvmmake();
+    kernel_pagetable = kvmmake(kaslr_offset);
 }
 
 // Switch h/w page table register to the kernel's page table,
