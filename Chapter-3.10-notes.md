@@ -269,7 +269,13 @@ The `trampoline` is a (shared) physical page that's mapped as read only and not 
 
 Upon initialize of a generic process, aside from its page table (in which contain `trampoline` at `TRAMPOLINE` and `trapframe` at `TRAPFRAME` which does *not* contribute to process size btw), kernel stack `kstack`, and PID, the only interesting thing that got initialized is the `ra` field of `context` field of `struct proc` pointing to `forkret` (`kernel/proc.c`) and `sp` pointing to *end* of `kstack` of that process.
 
-For the first process `initcode`/`init`, two other fields are initialized: the `epc` in its `trapframe` set to zero for user program counter, whereas the `sp` in its `trapframe` set to `PGSIZE` for user stack pointer.
+For the first process `initcode`/`init`, three other fields are initialized: the `epc` in its `trapframe` set to zero for user program counter, the `sp` in its `trapframe` set to `PGSIZE` for user stack pointer, and a page containing machine instructions of `initcode.S` is allocated, mapped, and filled with the instructions.
+
+### `scheduler` (`kernel/proc.c`)
+
+It might seem weird that we try to lock every process we see and check if it's waiting CPU resource: if it's already running on some other CPU, wouldn't the HART end up spinning the spinlock for nothing?
+Well, the first thing a HART starts running certain process, the first thing it should do is releasing the spinlock.
+The spinlock is to ensure every modification (writes) are visible (happens-before relationship) to other HARTs: we should not and do not hold them for extended period of time.
 
 # Questions
 
@@ -301,3 +307,6 @@ For the first process `initcode`/`init`, two other fields are initialized: the `
   - Seems to be related to possible scheduling due to `end_op` (`kernel/log.c` and `kernel/virtio_disk.c`), this call may change CPU
   - But we're pointing to the global fixed array of process table, right? Then we should not really care?
 - Why user process `trampoline` is mapped/unmapped at birth/death of process, unlike `kstack` which is mapped till XV6 itself dies? Seems like a job that's unnecessarily done multiple times...
+- Why isn't zero a valid system call number?
+- Why not enable interrupt via `intr_on` like in `usertrap` in `kerneltrap`? I guess RISC-V automatically disables interrupt when trap/interrupt from user mode to supervisor mode, but same cannot be stated when in supervisor mode (mode not changed)?
+- Why write only `sepc` and `sstatus` before exiting `kerneltrap`?

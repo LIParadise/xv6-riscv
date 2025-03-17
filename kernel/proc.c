@@ -552,10 +552,13 @@ void forkret(void)
     release(&myproc()->lock);
 
 oncelock_fsinit:
+    // `memory_order_relaxed` here then `atomic_thread_fence(memory_order_acquire)` when `Done` would also work,
+    // but that should be the hot path case,
+    // so an explicit fence there is suboptimal.
     switch (atomic_load_explicit(&file_system_init, memory_order_acquire))
     {
     case Done:
-        /* everything is ready, no-op */
+        /* everything ready, no-op */
         break;
     case BeingWorkedOn:
         /* should be not that long from some guy turning it to done, busy wait */
@@ -563,15 +566,17 @@ oncelock_fsinit:
         {
             /*
              * busy loop, `memory_order_relaxed` suffices,
-             * since the `goto` has another `memory_order_acquire` there anyway.
+             * since the `Done` is guarded by `memory_order_acquire` anyway.
              */
         }
         goto oncelock_fsinit;
-        break; // yeah, it's pedantic and unnecessary
+        break; // yeah, pedantic and unnecessary
     case Init:
         it_is_our_job = Init;
-        atomic_compare_exchange_strong_explicit(&file_system_init, &it_is_our_job, BeingWorkedOn, memory_order_release,
-                                                memory_order_relaxed);
+        // we need only atomicity here:
+        // as long as one and only one thread picks up the task, we're good to go
+        atomic_compare_exchange_weak_explicit(&file_system_init, &it_is_our_job, BeingWorkedOn, memory_order_relaxed,
+                                              memory_order_relaxed);
         if (Init == it_is_our_job)
         {
             // File system initialization must be run in the context of a
@@ -606,17 +611,18 @@ oncelock_fsinit:
              *      This `OnceLock`/`OnceCell` is ugly and needs refactor.
              * 2. How does Rust provide `OnceLock`/`OnceCell` anyway...?
              */
+            // establish happens-before relationship: if one thread sees `Done`, it must have been done.
             atomic_store_explicit(&file_system_init, Done, memory_order_release);
         }
         else
         {
             /*
              * somebody just picked up the job, check again.
-             * `memory_order_relaxed` suffices since we'll `memory_order_acquire` right after `goto`.
+             * RMW `memory_order_relaxed` suffices since `Done` guarded by `memory_order_acquire`.
              */
             goto oncelock_fsinit;
         }
-        break;
+        break; // yeah, pedantic and unnecessary
     default:
         panic("unreachable!");
         break;
