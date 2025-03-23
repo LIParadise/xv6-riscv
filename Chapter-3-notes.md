@@ -40,6 +40,11 @@ So it's since some VA-PA key-value pair is ubiquitous that they are present on b
 [SO, TLB with process identifier](https://stackoverflow.com/questions/76500243)
 [openhwgroup, CVA6](https://docs.openhwgroup.org/projects/cva6-user-manual/03_cva6_design/MMU.html)
 
+## [preshing.com, memory ordering at compile time](https://preshing.com/20120625/memory-ordering-at-compile-time)
+
+> The cardinal rule of memory reordering, which is universally followed by compiler developers and CPU vendors, could be phrased as follows:
+> _Thou shalt not modify the behavior of a single-threaded program._
+
 ## [preshing.com, memory barriers are like source control operations](https://preshing.com/20120710/memory-barriers-are-like-source-control-operations/)
 
 > Like compiler reordering, processor reordering is invisible to a single-threaded program. It only becomes apparent when [lock-free techniques](http://preshing.com/20120612/an-introduction-to-lock-free-programming) are used – that is, when shared memory is manipulated **without any mutual exclusion between threads**.
@@ -176,6 +181,104 @@ So `StoreLoad` is stronger after all: out of the four fences and combos, both th
 
 > If you really want to nitpick the fine details of processor memory models, and you enjoy eating formal logic for breakfast, you can check out the [admirably detailed work](http://www.cl.cam.ac.uk/~pes20/weakmemory/) done at the University of Cambridge. Paul McKenney has written an [accessible overview](http://lwn.net/Articles/470681/) of some of their work and its associated tools.
 
+## [preshing.com, atomic vs non-atomic operations](https://preshing.com/20130618/atomic-vs-non-atomic-operations)
+
+> Any time two threads operate on a shared variable concurrently, and one of those operations performs a write, both threads **must** use atomic operations.
+> If you violate this rule, and either thread uses a non-atomic operation, you’ll have what the C++11 standard refers to as a _**data race**_ (not to be confused with Java’s concept of a data race, which is different, or the more general [race condition](http://en.wikipedia.org/wiki/Race_condition)). The C++11 standard doesn’t tell you why data races are bad; only that if you have one, “undefined behavior” will result ([§1.10.21](http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2012/n3337.pdf)). The real reason why such data races are bad is actually quite simple: They result in torn reads and torn writes.
+
+### Non-Atomic CPU Instructions
+
+> A memory operation can be non-atomic even when performed by a single CPU instruction.
+
+``` assembly
+strd r0, r1, [r2]
+```
+
+> On some ARMv7 processors, this instruction is not atomic. When the processor sees this instruction, it actually performs two separate 32-bit stores under the hood ([§A3.5.3](http://web.eecs.umich.edu/~prabal/teaching/eecs373-f10/readings/ARMv7-M_ARM.pdf)).
+> Interestingly, a torn write is even possible on a single-core device: A system interrupt – say, for a scheduled thread context switch – can actually occur between the two internal 32-bit stores! In this case, when the thread resumes from the interrupt, it will restart the `strd` instruction all over again.
+
+[Jeff Preshing](https://preshing.com/20130618/atomic-vs-non-atomic-operations/#IDComment721196542)
+> You can be 100% sure of it if the compiler vendor guarantees it. For example, Microsoft [makes atomicity guarantees](http://msdn.microsoft.com/en-us/library/aa691278.aspx) for C#. I haven't found the same guarantee in Microsoft's C++ compiler documentation, but there is [Bruce Dawson's article](http://msdn.microsoft.com/en-us/library/windows/desktop/ee418650(v=vs.85).aspx) which states "you can assume that reads and writes of naturally aligned native types are atomic" and gives several examples in C. He was working at Microsoft at the time and the article is hosted on MSDN, so I think we can take that as fairly solid guarantee of compiler behavior.
+
+## [preshing.com, the happens-before relation](https://preshing.com/20130702/the-happens-before-relation)
+
+> Let A and B represent operations performed by a multithreaded process. If A happens-before B, then the memory effects of A effectively become visible to the thread performing B before B is performed.
+
+``` C
+int A = 0;
+int B = 0;
+
+void foo()
+{
+    A = B + 1;              // (1)
+    B = 1;                  // (2)
+}
+```
+
+> In this case, though, the store to `A` doesn’t actually influence the store to `B`. (2) still behaves the same as it would have even if the effects of (1) had been visible, which is _effectively_ the same as (1)’s effects being visible. Therefore, this doesn’t count as a violation of the _happens-before_ rule. I’ll admit, this explanation is a bit dicey, but I’m fairly confident it’s consistent with the meaning of _happen-before_ in all those language specifications.
+
+Let's recall [the cardinal rule of memory reordering... _Thou shalt not modify the behavior of a single-threaded program._](https://preshing.com/20120625/memory-ordering-at-compile-time). C++11/C11 defines this as [_sequenced-before_ relationship](https://sabrinajewson.org/rust-nomicon/atomics/multithread.html), but we all know that instruction reorder can and do happen even in single threaded execution on single CPU. But the thing is there's no contradiction between _sequenced-before_ and _happens-before_: since all the reordering are s.t. there's no visible side effect to behavior of a single-threaded program, so effectively we're fine, so we're fine.
+
+### Transitivity: is _happens-before_ relationship a partial ordering?
+
+Strictly abide by the C++11/C11, **no**.
+
+[Stefan](https://preshing.com/20130702/the-happens-before-relation/#IDComment799486860)
+> At least in C++11, strictly speaking, happens-before is not transitive. According to the standard, §1.10:12 (I am referring to the N3337 draft), an evaluation A happens before an evaluation B if A is sequenced before B, or A inter-thread happens before B.
+> For example, assume that operation A is dependency-ordered before B (see §1.10:11 for a definition; this is where consume operations come into play). In particular this means that A inter-thread happens before B. Further assume that B is sequenced before C.
+> Then A happens before B, B happens before C, but A is not required to happen before C by the standard.
+> This shows that happens-before is not transitive in C++11.
+[preshing](https://preshing.com/20130702/the-happens-before-relation/#IDComment834746109)
+> Hi Stefan,
+> You are totally right. In the current specifications of other languages, happens-before is transitive; [Java](http://docs.oracle.com/javase/specs/jls/se7/html/jls-17.html#jls-17.4.5) says so explicitly, and in [Go](http://golang.org/ref/mem#tmp_1) and [LLVM](http://llvm.org/docs/LangRef.html#memory-model-for-concurrent-operations), it's defined as a partial ordering, which implies transitivity. But in C++11, strictly speaking, it is not always transitive.
+> It comes pretty close: If we ignore consume operations and the dependency-ordered-before relation in C++11, the remaining forms of happens-before end up being transitive.
+> But it was a mistake for me to say that it was always transitive in C++11. I've removed that statement from the post. Thanks for the precision!
+
+Thank god the `memory_order_consume` was purged in [C++26](https://en.cppreference.com/w/cpp/atomic/memory_order)... not only it's extremely confusing and always teetering on the edge of being misused, but it also disrupts the partial ordering property of _happens-before_.
+
+## [preshing.com, the synchronizes-with relation](https://preshing.com/20130823/the-synchronizes-with-relation)
+
+> ”Synchronizes-with” is a term invented by language designers to describe ways in which the memory effects of source-level operations – even non-atomic operations – are guaranteed to become visible to other threads.
+
+> One thing they have in common is that whenever there’s a synchronizes-with relationship between two operations, typically on different threads, there’s a [_happens-before_ relationship](http://preshing.com/20130702/the-happens-before-relation) between those operations as well.
+
+> The promise is made in [§29.3.2 of working draft N3337](http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2012/n3337.pdf):
+> > An atomic operation A that performs a release operation on an atomic object M synchronizes with an atomic operation B that performs an acquire operation on M and takes its value from any side effect in the release sequence headed by A.
+
+> As for the condition that the read-acquire must “take its value from any side effect” – let’s just say it’s sufficient for the read-acquire to read the value written by the write-release. If that happens, the _synchronized-with_ relationship is complete, and we’ve achieved the coveted _happens-before_ relationship between threads. Some people like to call this a _synchronize-with_ or _happens-before_ “edge”.
+> Most importantly, the standard guarantees (in [§1.10.11-12](http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2012/n3337.pdf)) that whenever there’s a _synchronizes-with_ edge, the _happens-before_ relationship extends to neighboring operations, too. This includes all operations before the edge in Thread 1, and all operations after the edge in Thread 2.
+
+(Here Jeff Preshing used the (looser) term _happens-before_ for operations done within one single thread, when we know such relation is actually implied by the stronger [_sequenced-before_ relation](https://sabrinajewson.org/rust-nomicon/atomics/acquire-release.html) within one thread. But yeah the idea is the same: when some _load-acquire_ see some value written by some other _store-release_, _happens-before_ relation ensues.)
+
+> For example, in Java version 5 onward, every store to a `volatile` variable is a write-release, while every load from a `volatile` variable is a read-acquire. Therefore, any `volatile` variable in Java can act as a guard variable, and can be used to propagate a payload of any size between threads. Jeremy Manson explains this in his blog post on [`volatile` variables in Java](http://jeremymanson.blogspot.ca/2008/11/what-volatile-means-in-java.html). He even uses a diagram very similar to the one shown above, calling it the “two cones” diagram.
+
+> Just as _synchronizes-with_ is not only way to achieve a _happens-before_ relationship, a pair of _write-release_/_read-acquire_ operations is not the only way to achieve _synchronizes-with_; nor are C++11 atomics the only way to achieve acquire and release semantics.
+
+```
+Happens-before
+├── Program order (within a single thread)
+└── Synchronizes-with (between threads)
+    ├── Mutex lock/unlock
+    ├── Thread create/join
+    └── Acquire & release semantics
+        ├── C++11 atomic types
+        ├── volatile types in Java
+        ├── volatile types in Microsoft C/C++
+        └── Acquire & release fences
+            ├── C++11 fences
+            ├── Minitomic fences
+            └── Platform-specific memory fences
+```
+
+> Interestingly, the Go programming language is a bit of convention breaker. Go’s memory model is [well specified](http://golang.org/ref/mem), but the specification does not bother using the term “_synchronizes-with_” anywhere. It simply sticks with the term “_happens-before_”, which is just as good, since obviously, _happens-before_ can fill the role anywhere that _synchronizes-with_ would. Perhaps Go’s authors chose a reduced vocabulary because “_synchronizes-with_” is normally used to describe operations on different threads, and Go doesn’t expose the concept of threads.
+
+Ackchyually... Java does _more_ than requiring acquire-release when operating on `volatile`:
+
+[Manos](https://preshing.com/20130823/the-synchronizes-with-relation/#IDComment733115349)
+> "Of course, acquire and release semantics are not unique to C++11. For example, in Java version 5 onward, every store to a volatile variable is a write-release, while every load from a volatile variable is a read-acquire." Does this mean that volatile keyword in Java enforces acquire - release semantics? Because [Bartosz Milewski](https://bartoszmilewski.com/2008/11/11/who-ordered-sequential-consistency) claims that "Java enforces sequential consistency on all access to volatile variables." Also, if I run an test program similar to what described in [https://stackoverflow.com/questions/14861822](https://stackoverflow.com/questions/14861822) by Anthony Williams, son a x86 machine, I confirm that volatile in Java enforces sequential consistency.
+[preshing](https://preshing.com/20130823/the-synchronizes-with-relation/#IDComment733127934)
+> Java 5+ volatile does both. It enforces acquire & release semantics, and it enforces sequential consistency on all access to volatile variables. Similarly, C++11 atomic types do both when all atomic operations use `memory_order_seq_cst` (the default).
+
 ## [g.oswego.edu/dl/jmm/cookbook.html](https://web.archive.org/web/20160827171043/https://g.oswego.edu/dl/jmm/cookbook.html)
 
 > `StoreLoad` barriers: suppose we have `Store1; StoreLoadBarrier; Load2`, `StoreLoad` ensures that `Store1`'s data are made visible to other processors (i.e., flushed to main memory) before data accessed by `Load2` and **all** subsequent load instructions are loaded.
@@ -260,3 +363,5 @@ The reason is the design is to aid in writing **critical sections**: we want **a
 - So why exactly does kernels also choose to turn on virtual memory?
     - one reason is that real hardwares presents vastly different memory-mapped devices and physcial DRAM layouts; using virtual memory makes later kernel code easier: not necessarily directy map!
 - program headers (`objdump -p`) and object file sections (`objdump -h`), how do they relate to each other?
+- Relationship between `__sync_synchronize`, `memory_order_seq_cst`?
+  - If some flag is set only after `__sync_synchronize`/`std::atomic_thread_fence(memory_order_seq_cst)`, may we assume that `atomic_load_explicit(memory_order_relaxed)` suffices to _synchronize-with_/_happens-before_?

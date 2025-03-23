@@ -3,8 +3,9 @@ _*
 *.o
 *.d
 *.asm
-*.sym
 *.img
+*.sym
+*.out
 **/.cache
 compile_commands.json
 vectors.S
