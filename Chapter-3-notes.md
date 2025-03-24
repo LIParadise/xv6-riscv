@@ -358,6 +358,14 @@ The reason is the design is to aid in writing **critical sections**: we want **a
 
 > All the memory operations in between are contained inside a nice little barrier sandwich, preventing any undesireable memory reordering across the boundaries.
 
+## [preshing.com, Acquire and Release Fences](https://preshing.com/20130922/acquire-and-release-fences/)
+
+> - An **acquire fence** prevents the memory reordering of any **read** which **precedes** it in program order with any **read** or **write** which follows it in program order.
+> - A **release fence** prevents the memory reordering of any **read** or **write** which **precedes** it in program order with any **write** which follows it in program order.
+
+> In other words, in terms of the barrier types [explained here](http://preshing.com/20120710/memory-barriers-are-like-source-control-operations), an **acquire fence** serves as both a `LoadLoad` + `LoadStore` barrier, while a **release fence** functions as both a `LoadStore` + `StoreStore` barrier. That’s all they purport to do.
+
+
 ## Generic Questions
 
 - So why exactly does kernels also choose to turn on virtual memory?
@@ -365,3 +373,73 @@ The reason is the design is to aid in writing **critical sections**: we want **a
 - program headers (`objdump -p`) and object file sections (`objdump -h`), how do they relate to each other?
 - Relationship between `__sync_synchronize`, `memory_order_seq_cst`?
   - If some flag is set only after `__sync_synchronize`/`std::atomic_thread_fence(memory_order_seq_cst)`, may we assume that `atomic_load_explicit(memory_order_relaxed)` suffices to _synchronize-with_/_happens-before_?
+
+### [The sequential consistent order of C++11 vs traditional GCC built-ins like `__sync_synchronize`](https://stackoverflow.com/questions/79529347)
+
+First of all, `__sync_synchronize` according to [GCC](https://gcc.gnu.org/onlinedocs/gcc/_005f_005fsync-Builtins.html) is a *full memory barrier*, so it provides `StoreStore`/`LoadLoad`/`LoadStore`, and in particular `StoreLoad` all at once. That's what it does, again, full memory barrier.
+
+OTOH `SeqCst` is something that guarantees some global total ordering, s.t. it's consistent with [*not coherence-after relation*](https://sabrinajewson.org/rust-nomicon/atomics/seqcst.html) and [_**strongly** happens-before relation_](https://en.cppreference.com/w/cpp/atomic/memory_order).
+
+So these are really two completely separate regimes: one is from a practical hardware implementation PoV, one is from a mathematical total ordering (within all the atomic operations/fences which are `SeqCst`) that's consistent with some other partial ordering.
+
+However in practice, a full memory barrier often suffice as a `atomic_thread_fence(memory_order_seq_cst)`, in particular it has the `StoreLoad` barrier semantics: note in particular that given `atomic_store_explicit(&atomic_x, 42069, memory_order_seq_cst)` sequenced before `atomic_load_explicit(&atomic_y, memory_order_seq_cst)`, since the former `SeqCst` operation on `atomic_x` strongly happens-before the `SeqCst` operation on `atomic_y`, these two may *not* be reordered: one way achieving this is via the `StoreLoad` barrier.
+
+Note that an `atomic_thread_fence(memory_order_acquire)` may be achieved with barrier (`LoadStore` + `LoadLoad`), and `atomic_thread_fence(memory_order_release)` may be achieved with barrier (`LoadStore` + `StoreStore`), so an `atomic_thread_fence(memory_order_acq_rel)` may indeed be implemented with (`LoadLoad` + `LoadStore` + `StoreStore`), e.g. PowerPC [`lwsync`](https://www.cl.cam.ac.uk/%7Epes20/cpp/cpp0xmappings.html). It does **not** require a `StoreLoad` semantics here. However just like we've just seen, `SeqCst` requires the `StoreLoad` barrier semantics - however you achieve this, see also [ARMv8](https://developer.arm.com/documentation/102336/0100/Load-Acquire-and-Store-Release-instructions).
+
+So I _suppose_ on a *cache-coherent shared memory* CPU, a full memory barrier really is what you'd need when implementing `SeqCst` semantics..., and possibly more? But this would need some formal proofs that the total ordering it suggests really **is** a valid `SeqCst` total order... Anyway _intuitively_ it is what we need, since the ordering it produces should naturally be consistent with _happens-before_ relation (due to the fact they are known to be able to be implemented with memory barriers `LoadLoad`/`LoadStore`/`StoreStore`).
+
+[Peter Cordes](https://stackoverflow.com/questions/79529347/the-sequential-consistent-order-of-c11-vs-traditional-gcc-built-ins-like-sy/79529575?noredirect=1#comment140256002_79529575)
+> `SeqCst` requires a `StoreLoad` barrier between `SeqCst` stores and `SeqCst` loads, but putting a full barrier after each `SeqCst` store is just an implementation detail on ISAs without AArch64's special interaction between `stlr` and `ldar` where `ldar` has to wait for any `stlr` ops to drain from the store buffer, but otherwise `stlr` is just a *release-store*.
+
+[Peter Cordes](https://stackoverflow.com/questions/79529347/the-sequential-consistent-order-of-c11-vs-traditional-gcc-built-ins-like-sy/79529575?noredirect=1#comment140256012_79529575)
+> `SeqCst` is like `Acquire` + `Release` with the additional requirement that no `SeqCst` operation can reorder with any other `SeqCst` operation. `Acquire` is `LoadLoad` + `LoadStore` and `Release` is `StoreStore` + `LoadStore`; only `SeqCst` ever requires a `StoreLoad` barrier.
+
+[Nate Eldredge](https://stackoverflow.com/questions/79529347/the-sequential-consistent-order-of-c11-vs-traditional-gcc-built-ins-like-sy/79529575?noredirect=1#comment140254189_79529347)
+> The two keys are (1) have the variables in separate cache lines; (2) have a test that you can repeat quickly, without re-running the program or spawning new threads every time, and that isn't reliant on any particular timing synchronization between the threads.
+
+``` cpp
+//! Nate Eldredge
+//! https://stackoverflow.com/questions/79529347/the-sequential-consistent-order-of-c11-vs-traditional-gcc-built-ins-like-sy/79529575?noredirect=1#comment140254189_79529347
+
+// compile with g++ -O3 -std=c++20
+// reproduces LoadLoad reordering rapidly on ARM Cortex A-72, Cortex A-76, and Apple M3 at least
+
+#include <thread>
+#include <atomic>
+#include <iostream>
+#include <cstdint>
+#include <cassert>
+
+alignas(256) std::atomic<uint64_t> x{1}, y{1};
+
+void thr1() {
+    uint64_t c = 2;
+    while (true) {
+        x.store(c, std::memory_order_seq_cst);
+        y.store(c, std::memory_order_seq_cst);
+        c++;
+    }
+}
+
+void thr2() {
+    while (true) {
+        uint64_t xx, yy;
+        yy = y.load(std::memory_order_relaxed);
+        if (yy != 0) { // always true but imposes control dependency
+            xx = x.load(std::memory_order_relaxed);
+            if (xx < yy) {
+                std::cout << "Got x=" << xx << ", y=" << yy << std::endl;
+                std::exit(1);
+            }
+        }
+    }
+}
+
+int main() {
+    std::thread t1(thr1);
+    std::thread t2(thr2);
+    t1.join();
+    t2.join();
+    return 0;
+}
+```
