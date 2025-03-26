@@ -365,6 +365,69 @@ The reason is the design is to aid in writing **critical sections**: we want **a
 
 > In other words, in terms of the barrier types [explained here](http://preshing.com/20120710/memory-barriers-are-like-source-control-operations), an **acquire fence** serves as both a `LoadLoad` + `LoadStore` barrier, while a **release fence** functions as both a `LoadStore` + `StoreStore` barrier. That’s all they purport to do.
 
+> Note that the guard variable must “leak” from Larry’s private workspace over to Sergey’s all by itself. When you think about it, acquire and release fences are just a way to piggyback additional data on top of such leaks.
+
+[Francesco](https://preshing.com/20130922/acquire-and-release-fences/#IDComment1037429346)
+> HI Jeff!
+> Maybe it could seem like a dumb question, but I need to understand the very basic of this mechanics :)
+> If a thread will call SendTestMessage in a loop and another will call TryReceiveMessage in a loop too, there is the chance that the values copied from shared memory into result by the consumer will present values belonging to different calls of SendTestMessage?
+> There is nothing to prevent that the consumer thread could recognize if the producer has overwritten some value in the shared memory...
+[Jeff Preshing](https://preshing.com/20130922/acquire-and-release-fences/#IDComment1037445264)
+> Yes, if you try to send/receive more than one "message" by calling SendTestMessage and TryReceiveMessage in a loop, exactly as they're written here, you will have problems for the reasons you point out. The sample code shown here is very simple -- it only works for a single message.
+> If you want to send/receive multiple messages (in a nonblocking way), you'll have to write each message to a different location in memory. A lock-free queue will do the job for you. Or, a pointer to a single message dynamically allocated on the heap, with some kind of safe memory reclamation scheme for when the pointer is replaced.
+
+[Fredi](https://preshing.com/20130922/acquire-and-release-fences/#IDComment1039893834)
+> Hi Jeff,
+> I was thinking about the following scenario where a release fence might achieve the same result as an acquire fence. In thread_two, you want to acquire the value of 'val', but since both acquire and release fences prevent #LoadStore reordering, the store 'val=123' cannot be reordered with the load from g_sync and therefore I would argue that, in this particular case (!), a release fence would achieve the exact same result as an acquire fence and the load in thread_one can never see 123
+
+``` C
+#include <stdatomic.h>
+#include <stdbool.h>
+#include <stdint.h>
+
+static atomic_bool g_sync = false;
+static uint32_t yjsp = 0;
+
+void thrd_a() {
+    uint32_t tokugawa = yjsp;
+    yjsp = 42069;
+    atomic_thread_fence(memory_order_release);
+    atomic_store_explicit(&g_sync, true, memory_order_relaxed);
+}
+
+void thrd_b() {
+    while (!atomic_load_explicit(&g_sync, memory_order_relaxed)) {}
+    atomic_thread_fence(memory_order_release); // on purpose, for thought experiment: it should be a `LoadStore` fence, right?
+    yjsp = 114514;
+}
+```
+
+[Jeff Preshing](https://preshing.com/20130922/acquire-and-release-fences/#IDComment1039900132)
+> Neat example. Your reasoning makes sense to me and I would even bet that on real hardware, you would never see `yjsp == 114514` after both threads are joined. However I would advise against doing so simply because the C++ standard doesn't directly support that particular usage.
+
+## [preshing.com, Acquire and Release Fences Don't Work the Way You'd Expect](https://preshing.com/20131125/acquire-and-release-fences-dont-work-the-way-youd-expect/)
+
+> Raymond Chen [defined acquire and release semantics as follows](http://blogs.msdn.com/b/oldnewthing/archive/2008/10/03/8969397.aspx), back in 2008:
+> > An operation with **acquire semantics** is one which does not permit subsequent memory operations to be advanced before it. Conversely, an operation with **release semantics** is one which does not permit preceding memory operations to be delayed past it.
+
+> Raymond’s definition applies perfectly well to Win32 functions like `InterlockedIncrementRelease`, which he was writing about at the time. It also applies perfectly well to [atomic operations](http://preshing.com/20130618/atomic-vs-non-atomic-operations) in C++11, such as `store(1, std::memory_order_release)`.
+> It’s perhaps surprising, then, that this definition does not apply to standalone [acquire and release fences](http://preshing.com/20130922/acquire-and-release-fences) in C++11! Those are a whole other ball of wax.
+
+### In C++11, a Release Fence Is Not Considered a “Release Operation”
+
+> In the language of C++11, only a store can be a release operation, and only a load can be an acquire operation. (See §29.3.1 of [working draft N3337](http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2012/n3337.pdf).) A memory fence is neither a load nor a store, so obviously, it can’t be an acquire or release operation. Furthermore, if we accept that acquire and release semantics apply only to acquire and release _operations_, it’s clear that Raymond Chen’s definition does not apply to acquire and release fences. In my own post about [acquire and release semantics](http://preshing.com/20120913/acquire-and-release-semantics), I was careful to specify the kind of operations on which they can apply.
+
+### Nor Can a Release Operation Take the Place of a Release Fence
+
+``` cpp
+Singleton* tmp = new Singleton;
+g_dummy.store(0, std::memory_order_release);
+m_instance.store(tmp, std::memory_order_relaxed);
+```
+
+> This time, we really _do_ have the problem that Herb Sutter was worried about: The store to `m_instance` is now free to be reordered before the store to `g_dummy`, and possibly before any stores performed by the `Singleton` constructor. The fox is in the henhouse, and mayhem ensues!
+
+> (Interesting side note: An early draft of the C++11 standard, [N2588](http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2008/n2588.pdf), dating back to 2008, actually tried to define memory fences in a manner similar to this example. There was no standalone `atomic_thread_fence` function in that draft; there was only a member function on atomic objects, `fence`. For convenience, the draft included a `global_fence_compatibility` object, similar to the `g_dummy` object used here. A paper by Peter Dimov [revealed some shortcomings](http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2008/n2633.html) in this design. As a result, the C++11 standard committee ditched the approach in favor of the standalone fence function we have today.)
 
 ## Generic Questions
 
