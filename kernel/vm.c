@@ -62,18 +62,10 @@ pagetable_t kvmmake(const uintptr_t kaslr_offset)
                sys_get_free_pages());
         freerange((void *)(uintptr_t)KERNBASE,
                   GENERIC_PTR_SUB(void *, PGROUNDUP((uintptr_t)kernel_end_marked_by_ld), kaslr_offset));
-        if (!kmem_sane_check())
-        {
-            panic("kmem insane: kvmmake (1st)");
-        }
-        if (!kmem_sane_check())
-        {
-            panic("kmem insane: kvmmake (2nd)");
-        }
         printf("debug: KASLR offset %lu == 0x%llx, pages %lu\n", kaslr_offset, (unsigned long long)kaslr_offset,
                sys_get_free_pages());
+        kvmmap(kpgtbl, KERNBASE, KERNBASE, kaslr_offset, PTE_R | PTE_W);
     }
-    kvmmap(kpgtbl, KERNBASE, KERNBASE, kaslr_offset, PTE_R | PTE_W);
 
     // map KASLR relocated kernel text executable and read-only.
     kvmmap(kpgtbl, kaslr_offset + KERNBASE, kaslr_offset + KERNBASE, (uint64)etext - (kaslr_offset + KERNBASE),
@@ -89,16 +81,18 @@ pagetable_t kvmmake(const uintptr_t kaslr_offset)
     // allocate and map a kernel stack for each process.
     proc_mapstacks(kpgtbl);
 
+    if (!kmem_sane_check() || !kmem_sane_check())
+    {
+        panic("kmem insane: kvmmake");
+    }
+
     return kpgtbl;
 }
 
 /**
  * Non-reentrant function: only called once after boot.
  *
- * Initialize the one `kernel_pagetable`
- *
- * FIXME
- * should map the relocated pages instead of hardcoded pages
+ * Initialize the one `kernel_pagetable` after reclaiming the ram occupied by the old kernel (KASLR).
  */
 void kvminit(const uintptr_t kaslr_offset)
 {

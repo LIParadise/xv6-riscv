@@ -368,7 +368,7 @@ bool kmem_sane_check(void)
         uint64_t *tag = ALIGN_UP(uint64_t *, GENERIC_PTR_ADD(void *, node, sizeof(struct kmem_linked_list_node)));
         if ((uint64_t)(-1) == *tag)
         {
-            // `kfree` sets the memory to all `1`; mark as walked.
+            // `kfree` sets the memory to all bits `1`; mark as walked.
             *tag = actual_pages++;
             node = node->next;
         }

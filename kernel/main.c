@@ -44,7 +44,6 @@ void main()
         printf("xv6 kernel is booting\n");
         printf("\n");
 
-        /* TODO: free the old RAM */
         kvminit(kaslr_offset); // create kernel page table
         kvminithart();         // turn on paging
         procinit();            // process table
