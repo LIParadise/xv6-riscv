@@ -24,6 +24,30 @@ Such a scheme helps save some pages if the process barely uses RAM: instead of u
 | 510      | 0x_000_0000_01FE == 510 |                         |
 | 511      | 0x_000_0000_01FF == 511 |                         |
 
+### Page Table May Not Cover All Possible VA-PA mappings
+
+Depending on the available physical pages, some possible VA to PA mapping are not possible.
+
+For example, let us consider first a simple page table with only 3 pages of total physical ram, `satp` being the last page, and `VA - 4096 = PA`. A possible config looks like this:
+
+| PA # page     | VA # page    | Index of PPN   | 44-bit PPN     | Comment                            |
+| ------------- | ------------ | -------------- | -------------- | ---------------------------------- |
+| 0             | 1            | 1              | 0              | level-0 page table, PPN is PA page |
+| 0             | 1            | 2              | 1              | level-0 page table, PPN is PA page |
+| 0             | 1            | 3              | 2              | level-0 page table, PPN is PA page |
+| 1             | 2            | 0              | 0              | level-1 page table
+| 2             | 3            | 0              | 1              | level-2 page table, `satp`         |
+
+So far so good. But it's also ok if you're somewhat uncomfortable with this approach, since does not cover all possible cases. In particular, how about this mapping?
+
+| PA # page     | VA                     | Index of PPN   | 44-bit PPN     |
+| ------------- | ---------------------- | -------------- | -------------- |
+| 0             | 1 GiB (`1 << 30`)      | ?              | ?              |
+| 1             | 2 GiB                  | ?              | ?              |
+| 2             | 3 GiB                  | ?              | ?              |
+
+Due to how VA is to be translated into PA in Sv-39, i.e. 39 bits, 9, 9, 9, then 12, these three VA (1 GiB, 2 GiB, and 3 GiB) *must* occupy 3 consecutive PTEs in the top-level level-2 page table page i.e. that pointed to by `satp`. Obviously these 3 entries must point to differnet physical pages (differnet 44-bit PPN). But remember, in this config we have only 3 physical pages. _There might simply be no enough physical pages if VA are too far apart from each other._
+
 ### Questions
 
 > G flag prevents TLB flushes of a PTE
@@ -39,6 +63,24 @@ So it's since some VA-PA key-value pair is ubiquitous that they are present on b
 [reddit, understanding paging implementation](https://redd.it/1g5d8lw)
 [SO, TLB with process identifier](https://stackoverflow.com/questions/76500243)
 [openhwgroup, CVA6](https://docs.openhwgroup.org/projects/cva6-user-manual/03_cva6_design/MMU.html)
+
+## XV6, From Supervisor Mode to First User Process
+
+First, HART 0 (in my fork, after KASLR is done) collects all the _PA_ in `kmem`, after which initializes the _kernel direct virtual memory map_. Direct map matters since `kmem` gives/reclaims PA.
+
+Next, it sets up the processes. In vanilla XV6, process count is fixed and the PCBs are kept in a static global array [`struct proc proc[NPROC]`](kernel/proc.c). It sets the process state (for scheduling) to `UNUSED`, initializes per-process `struct spinlock`, and assign them the (high) kernel virtual memory VA of `kstack`: these physical pages are mapped _twice_, one in kernel direct map, one in high VA. This is safe since those pages are `kalloc`-ed but never `kfree`-ed, so the only way accessing them is via these high `kstack` VA. Also, the global `struct spinlock wait_lock` is initialized, too.
+
+XV6 then sets up the `stvec` register, the Supervisor mode Trap VECtor, for dealing with interruptions happening as the HART is in supervisor mode.
+
+### Interrupt Handlers e.g. `stvec`: Why Asssembly Code?
+
+One may wonder why assembly rather than calling specific functions just like how user space `ecall` system calls?
+
+Well you always have to register _some machine code somewhere_. That's what `stvec` is for. But you can't just put a generic C function call there: the calling convention is different. One of the things interrupt handlers need to make sure is it shall not disturb the original context, rather it should be transparent to all other code, thus _all_ the context needs to be saved somewhere, but generic C calling convention assumes some registers are _caller-saved_. Thus generic C call won't work: you always have to write some assembly manually for this special case.
+
+### Questions
+
+- What's the purpose of [`struct spinlock wait_lock`](kernel/proc.c)? When and how to use it?
 
 ## [preshing.com, memory ordering at compile time](https://preshing.com/20120625/memory-ordering-at-compile-time)
 

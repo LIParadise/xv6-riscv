@@ -115,14 +115,18 @@ void kvminithart()
 /**
  * Return the address of the PTE in page table pagetable
  * that corresponds to virtual address va.
- * If alloc != 0, create any required page-table pages.
+ *
+ * Top level page is assumed to had been allocated,
+ * (level-2 for Sv39)
+ * if alloc != 0, create required non-top-level page table pages
+ * (level-1 and level-0 for Sv39)
  *
  * N.B.
- * 1. The fresh L0 page table is `memset` to all zero,
+ * 1. We `memset` to all zero for newly allocated pages,
  *    thus if user add new pages to the page table via only this function,
- *    and that if user is sure that this input VA must not be in the table,
- *    user may check the `PTE_V` bit of the returned PTE:
- *    if that bit is set, it's an error in `kalloc`, giving out aliased memory.
+ *    thus user may check the `PTE_V` bit of the returned PTE:
+ *    if that bit is set, than the VA had been mapped:
+ *    if user is sure this VA shall not have been mapped, then it's an error.
  * 2. Return `NULL` if page absent and either of the following:
  *    a. alloc flag not set
  *    b. `kalloc` failed, probably because out of memory

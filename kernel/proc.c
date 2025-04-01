@@ -45,7 +45,12 @@ void proc_mapstacks(pagetable_t kpgtbl)
     }
 }
 
-// initialize the proc table.
+/**
+ * initialize the proc table.
+ *
+ * TODO
+ * figure out what, when, why, and how `wait_lock`
+ */
 void procinit(void)
 {
     struct proc *p;
