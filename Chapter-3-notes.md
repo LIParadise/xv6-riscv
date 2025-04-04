@@ -471,6 +471,26 @@ m_instance.store(tmp, std::memory_order_relaxed);
 
 > (Interesting side note: An early draft of the C++11 standard, [N2588](http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2008/n2588.pdf), dating back to 2008, actually tried to define memory fences in a manner similar to this example. There was no standalone `atomic_thread_fence` function in that draft; there was only a member function on atomic objects, `fence`. For convenience, the draft included a `global_fence_compatibility` object, similar to the `g_dummy` object used here. A paper by Peter Dimov [revealed some shortcomings](http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2008/n2633.html) in this design. As a result, the C++11 standard committee ditched the approach in favor of the standalone fence function we have today.)
 
+## [preshing.com, Double-Checked Locking is Fixed In C++11](https://preshing.com/20130930/double-checked-locking-is-fixed-in-cpp11/)
+
+> Suppose you have a class that implements the well-known [Singleton](http://en.wikipedia.org/wiki/Singleton_pattern) pattern, and you want to make it thread-safe. The obvious approach is to ensure mutual exclusivity by adding a lock.
+> It’s a totally valid approach, but once the singleton is created, there isn’t really any need for the lock anymore. [Locks aren’t necessarily slow](http://preshing.com/20111118/locks-arent-slow-lock-contention-is), but they don’t scale well under heavy contention.
+> The **double-checked locking pattern** avoids this lock when the singleton already exists.
+
+> Another such platform is the recently introduced ARMv8 architecture. ARMv8 offers `ldar` and `stlr` instructions, which are similar to Itanium’s `ld.acq` and `st.rel` instructions, except that they also enforce the heavier [`StoreLoad`](https://preshing.com/20120710/memory-barriers-are-like-source-control-operations/#storeload) ordering between the `stlr` instruction and any subsequent `ldar`. In fact, ARMv8’s new instructions are intended to implement C++11’s `SeqCst` atomics, described next.
+
+### Using C++11 Data-Dependency Ordering
+
+> In all of the above examples I’ve shown here, there’s a *synchronizes-with* relationship between the thread that creates the singleton and any subsequent thread that avoids the lock. The guard variable is the singleton pointer, and the payload is the contents of the singleton itself. In this case, the payload is considered a **data dependency** of the guard pointer.
+
+> It turns out that when working with data dependencies, a read-acquire operation, which all of the above examples use, is actually overkill! It’s sufficient to perform a **consume operation** instead. Consume operations are meant to eliminate one of the `lwsync` instructions on PowerPC, and one of the `dmb` instructions on ARMv7. I’ll write more about data dependencies and consume operations in a [future post](http://preshing.com/20140709/the-purpose-of-memory_order_consume-in-cpp11).
+
+## [The C `register` keyword](https://stackoverflow.com/questions/578202)
+
+On the surface it's like `inline`: a mere *hint* to the compiler that the programer thinks that the variable is better kept in CPU register rather than memory. And just like `inline`, compiler is free to ignore such suggestions, whether due to its optimization algorithms or didn't bother implement it.
+
+But more importantly, in C, it **disables** the address of operator on the variable, i.e. there shall be **no pointers** to it, which makes aliasing impossible, which unlocks some optimization tricks. OTOH C++ is more free in this regard: if you take address of some `register` variable, then it's the `register` keyword that got ignored.
+
 ## Generic Questions
 
 - So why exactly does kernels also choose to turn on virtual memory?
