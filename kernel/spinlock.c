@@ -29,12 +29,15 @@ void acquire(struct spinlock *lk)
     if (holding(lk))
         panic("acquire");
 
-    // StoreStore fence to ensure interrupt is disabled before we take the lock
-    //
-    // TODO
-    // is this really required?
-    // The original implementation didn't use this...
-    __asm__ volatile("fence w, w" : : :);
+    // Single thread StoreStore compiler fence to ensure interrupt is disabled before we take the lock
+    // https://stackoverflow.com/questions/79554522
+    // [`zicsr`](https://github.com/riscv/riscv-isa-manual/blob/600b757e543a19b07d79b82120bd10b84f19912e/src/zicsr.adoc)
+    // [`rvwmo`](https://github.com/riscv/riscv-isa-manual/blob/600b757e543a19b07d79b82120bd10b84f19912e/src/rvwmo.adoc)
+    // Side effects of CSR accesses on RISC-V respect program order, in terms the order of instructions.
+    // Interrupt enabled or not is a per-HART thing.
+    // So what we need is telling the compiler not to mess around with the store operation,
+    // in particular w.r.t. the later CAS lock acquisition.
+    atomic_signal_fence(memory_order_release);
 
     // On RISC-V, sync_lock_test_and_set turns into an atomic swap:
     //   a5 = 1
@@ -60,9 +63,9 @@ void release(struct spinlock *lk)
     lk->cpu = 0;
     atomic_store_explicit(&lk->locked, false, memory_order_release);
 
-    // StoreStore fence to ensure interrupt is enabled after we relinquish the lock.
+    // StoreStore compiler fence to ensure interrupt is enabled after we relinquish the lock.
     // The original implementation did have this (`__sync_synchronize`) semantics.
-    __asm__ volatile("fence w, w" : : :);
+    atomic_signal_fence(memory_order_release);
 
     pop_off();
 }
