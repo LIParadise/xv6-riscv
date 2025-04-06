@@ -204,8 +204,8 @@ void kinit_kaslr(uintptr_t *const p_kaslr_offset, atomic_bool *const kaslr_done,
 {
     uint64 kaslr_offset, ra, sp;
     /* store the return address for later we shall return to relocated kernel */
-    __asm__ volatile("addi %0, ra, 0x0" : "=r"(ra));
-    __asm__ volatile("addi %0, sp, 0x0" : "=r"(sp));
+    __asm__ volatile("addi %0, ra, 0x0" : "=r"(ra)::"memory");
+    __asm__ volatile("addi %0, sp, 0x0" : "=r"(sp)::"memory");
 
     kaslr_offset = kinit_kaslr_worker();
     if (0 == kaslr_offset)
@@ -242,7 +242,7 @@ void kinit_kaslr(uintptr_t *const p_kaslr_offset, atomic_bool *const kaslr_done,
      * so another register is used.
      */
     ra += kaslr_offset;
-    __asm__ volatile("sd %0, " KASLR_RA_OFFSET_FROM_SP "(%1)" : : "r"(ra), "r"(sp));
+    __asm__ volatile("sd %0, " KASLR_RA_OFFSET_FROM_SP "(%1)" : : "r"(ra), "r"(sp) : "memory");
 
     return;
 }
