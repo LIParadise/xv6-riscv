@@ -46,7 +46,7 @@ So far so good. But it's also ok if you're somewhat uncomfortable with this appr
 | 1             | 2 GiB                  | ?              | ?              |
 | 2             | 3 GiB                  | ?              | ?              |
 
-Due to how VA is to be translated into PA in Sv-39, i.e. 39 bits, 9, 9, 9, then 12, these three VA (1 GiB, 2 GiB, and 3 GiB) *must* occupy 3 consecutive PTEs in the top-level level-2 page table page i.e. that pointed to by `satp`. Obviously these 3 entries must point to differnet physical pages (differnet 44-bit PPN). But remember, in this config we have only 3 physical pages. _There might simply be no enough physical pages if VA are too far apart from each other._
+Due to how VA is to be translated into PA in Sv-39, i.e. 39 bits, 9, 9, 9, then 12, these three VA (1 GiB, 2 GiB, and 3 GiB) _must_ occupy 3 consecutive PTEs in the top-level level-2 page table page i.e. that pointed to by `satp`. Obviously these 3 entries must point to differnet physical pages (differnet 44-bit PPN). But remember, in this config we have only 3 physical pages. _There might simply be no enough physical pages if VA are too far apart from each other._
 
 ### Questions
 
@@ -66,11 +66,43 @@ So it's since some VA-PA key-value pair is ubiquitous that they are present on b
 
 ## XV6, From Supervisor Mode to First User Process
 
-First, HART 0 (in my fork, after KASLR is done) collects all the _PA_ in `kmem`, after which initializes the _kernel direct virtual memory map_. Direct map matters since `kmem` gives/reclaims PA.
+First, HART0 (in my fork, after KASLR is done) collects all the _PA_ in `kmem`, after which initializes the _kernel direct virtual memory map_. Direct map matters since `kmem` gives/reclaims PA.
 
 Next, it sets up the processes. In vanilla XV6, process count is fixed and the PCBs are kept in a static global array [`struct proc proc[NPROC]`](kernel/proc.c). It sets the process state (for scheduling) to `UNUSED`, initializes per-process `struct spinlock`, and assign them the (high) kernel virtual memory VA of `kstack`: these physical pages are mapped _twice_, one in kernel direct map, one in high VA. This is safe since those pages are `kalloc`-ed but never `kfree`-ed, so the only way accessing them is via these high `kstack` VA. Also, the global `struct spinlock wait_lock` is initialized, too.
 
 XV6 then sets up the `stvec` register, the Supervisor mode Trap VECtor, for dealing with interruptions happening as the HART is in supervisor mode.
+
+### `userinit`
+
+The [`userinit`](kernel/proc.c) function first `allocproc`, which allocates the PID and _page table_, maps the _trampoline_ and _trapframe_ at high VA in the page table, and set the PCB `context` field `ra` to `forkret` and `sp` to its kernel stack.
+
+1. [`allocproc`](kernel/proc.c)
+    1. User virtual memory space
+        - [`trampoline`](kernel/trampoline.S) at `TRAMPOLINE` high user space VA
+            - No allocation except user page table tree: it's just making existing kernel `.text` available in the user VA
+            - No `PTE_U`
+        - [`trapframe`](kernel/proc.h) (which XV6 just allocated for this process via kernel direct map) at `TRAPFRAME` high user space VA
+            - Thus this physical page is mapped twice here, one via kernel direct map via the `struct proc` PCB, one in the high VA user space of the process
+            - Allocated by the kernel, of which kernel direct map VA is recorded in the `struct proc` PCB, and mapped again in the user VA.
+            - No `PTE_U`
+    2. Kernel virtual memory space
+        - Allocate the page table `pagetable` of the `struct proc` PCB
+        - Allocate the `trapframe` of the `struct proc` PCB
+            - which is then mapped again in the user virtual memory space
+        - The `context` field of the `struct proc` PCB
+            - `ra` set to [`forkret`](kernel/proc.c)
+            - `sp` set to `kstack` of that process (again via the `struct proc` PCB)
+2. [`userinit`](kernel/proc.c)
+    1. Allocate a fresh page at VA `0` in the user memory space in which resides [`initcode`](kernel/proc.c)
+        - Do not forget the `sz` field of the `struct proc` PCB!
+            - Note that `trampoline` and `trapframe` are not counted
+            - These two fields track the size of the user memory space
+    2. Set `epc` of the `trapframe` in `struct proc` PCB to `0`, meaning when return, it starts from the first instruction
+    3. Set `sp` of the `trapframe` in `struct proc` PCB to `PGSIZE`, meaning that only (for now) page of the user space contains both the stack and `.text`...
+        - Safety concerns?
+
+[supervisor.adoc](https://github.com/riscv/riscv-isa-manual/blob/869612154a1c7646994567cd14da3784c568dc92/src/supervisor.adoc)
+> Note that writing `satp` does not imply any ordering constraints between page-table updates and subsequent address translations, nor does it imply any invalidation of address-translation caches. If the new address space’s page tables have been modified, or if an ASID is reused, it may be necessary to execute an SFENCE.VMA instruction (see `sfence.vma`) after, or in some cases before, writing `satp`.
 
 ### Interrupt Handlers e.g. `stvec`: Why Asssembly Code?
 
@@ -78,9 +110,11 @@ One may wonder why assembly rather than calling specific functions just like how
 
 Well you always have to register _some machine code somewhere_. That's what `stvec` is for. But you can't just put a generic C function call there: the calling convention is different. One of the things interrupt handlers need to make sure is it shall not disturb the original context, rather it should be transparent to all other code, thus _all_ the context needs to be saved somewhere, but generic C calling convention assumes some registers are _caller-saved_. Thus generic C call won't work: you always have to write some assembly manually for this special case.
 
-### Questions
+### XV6 Context Switch Questions
 
 - What's the purpose of [`struct spinlock wait_lock`](kernel/proc.c)? When and how to use it?
+- `sfence.vma`: why the spec suggests when recycling ASID (which XV6 implicitly does since it does no ASID for now), one should `sfence.vma` _after_ changing the `satp` to with the recycled ASID? Wouldn't that imply implicitly referencing stale physical address being possible?
+- Safety concerns when `userinit` sets the user `.text` and stack to the same page?
 
 ## [preshing.com, memory ordering at compile time](https://preshing.com/20120625/memory-ordering-at-compile-time)
 
@@ -160,10 +194,11 @@ assert(r0 == 0);
 > Remember, the push operation may be delayed for an arbitrary number of instructions, and the pull operation might not pull from the head revision.
 
 With `StoreStore` followed by `LoadLoad`, the CPU only needs to make sure these two things:
+
 1. As the next write _leaks_ into the global visible memory, all previous writes must had been also made available there, too.
-  - The next write might be miles away after the `LoadLoad` fence, before which we might have lots of load instructions!
+   - The next write might be miles away after the `LoadLoad` fence, before which we might have lots of load instructions!
 2. All the values it loads after `LoadLoad` must be at least as new as the latest amongst all the previous values it had loaded.
-  - The last load instruction might be miles backwards it might be the case it's so ancient it witnessed dinosaurs going extinct.
+   - The last load instruction might be miles backwards it might be the case it's so ancient it witnessed dinosaurs going extinct.
 So `StoreLoad` is stronger after all: out of the four fences and combos, both the assertions in the previous example are not right iff we have this fence.
 
 ### How Far Does This Analogy Get You?

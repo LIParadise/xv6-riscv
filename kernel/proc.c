@@ -98,8 +98,12 @@ int allocpid()
     // We don't care about happens-before relationship,
     // but atomicity and uniqueness of PID.
     //
+    // We maintain the convention that the first user process `init` having PID `1`
+    // since HART0 initializes everything including this PID allocation convention
+    // before other HARTs may do their work.
+    //
     // Q: why 32-bit
-    // A: not that there's a reason but the original implementation is, too.
+    // A: not that there's a reason but the original XV6 implementation is, too.
     return atomic_fetch_add_explicit(&pid, 1, memory_order_relaxed);
 }
 
@@ -179,7 +183,7 @@ static void freeproc(struct proc *p)
 }
 
 // Create a user page table for a given process, with no user memory,
-// but with trampoline and trapframe pages.
+// but with trampoline and trapframe pages at high VA.
 //
 // Process must already have it's own PA trapframe.
 pagetable_t proc_pagetable(struct proc *p)
@@ -199,8 +203,10 @@ pagetable_t proc_pagetable(struct proc *p)
 
     // map the trampoline code (for system call return)
     // at the highest user virtual address.
-    // only the supervisor uses it, on the way
-    // to/from user space, so not PTE_U.
+    //
+    // Only the supervisor uses it,
+    // on the way to/from user space,
+    // so not `PTE_U`.
     if (mappages(pagetable, TRAMPOLINE, PGSIZE, (uint64)trampoline, PTE_R | PTE_X) < 0)
     {
         uvmfree(pagetable, 0);
@@ -558,8 +564,7 @@ void forkret(void)
 
 oncelock_fsinit:
     // `memory_order_relaxed` here then `atomic_thread_fence(memory_order_acquire)` when `Done` would also work,
-    // but that should be the hot path case,
-    // so an explicit fence there is suboptimal.
+    // but that should be the hot path, meaning an explicit fence would be suboptimal.
     switch (atomic_load_explicit(&file_system_init, memory_order_acquire))
     {
     case Done:
@@ -579,14 +584,16 @@ oncelock_fsinit:
     case Init:
         it_is_our_job = Init;
         // we need only atomicity here:
-        // as long as one and only one thread picks up the task, we're good to go
-        atomic_compare_exchange_weak_explicit(&file_system_init, &it_is_our_job, BeingWorkedOn, memory_order_relaxed,
-                                              memory_order_relaxed);
-        if (Init == it_is_our_job)
+        // as long as one and only one thread picks up the task, we're good to go,
+        // thus `memory_order_relaxed` suffices for the CAS success case
+        if (atomic_compare_exchange_weak_explicit(&file_system_init, &it_is_our_job, BeingWorkedOn,
+                                                  memory_order_relaxed, memory_order_relaxed))
         {
-            // File system initialization must be run in the context of a
-            // regular process (e.g., because it calls sleep), and thus cannot
-            // be run from main().
+            // CAS success, meaning it's this HART's job.
+
+            // File system initialization must be run in the context of a regular process
+            // (e.g. because it calls sleep),
+            // and thus cannot be run from `main`.
             fsinit(ROOTDEV);
             {
                 /*
@@ -622,8 +629,9 @@ oncelock_fsinit:
         else
         {
             /*
-             * somebody just picked up the job, check again.
-             * RMW `memory_order_relaxed` suffices since `Done` guarded by `memory_order_acquire`.
+             * CAS failed, either suriously or somebody just picked up the job, check again.
+             * `memory_order_relaxed` suffices the ordering for this failed case,
+             * since any load of `Done` would be guarded by `memory_order_acquire`.
              */
             goto oncelock_fsinit;
         }

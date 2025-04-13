@@ -99,8 +99,10 @@ void kvminit(const uintptr_t kaslr_offset)
     kernel_pagetable = kvmmake(kaslr_offset);
 }
 
-// Switch h/w page table register to the kernel's page table,
-// and enable paging.
+/**
+ * Switch hardware page table register to the kernel's page table,
+ * and enable paging.
+ */
 void kvminithart()
 {
     // wait for any previous writes to the page table memory to finish.
@@ -227,8 +229,9 @@ int mappages(pagetable_t pagetable, const uint64 va, const uint64 size, const ui
     return 0;
 }
 
-// Remove npages of mappings starting from va. va must be
-// page-aligned. The mappings must exist.
+// Remove `npages` of mappings starting from `va`.
+// `va` must be page-aligned.
+// The mappings must exist.
 // Optionally free the physical memory.
 void uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 {

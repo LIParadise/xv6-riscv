@@ -302,7 +302,7 @@ static inline uint64 r_ra()
 static inline void sfence_vma()
 {
     // the zero, zero means flush all TLB entries.
-    __asm__ volatile("sfence.vma zero, zero" ::: "memory");
+    __asm__ volatile("sfence.vma x0, x0" ::: "memory");
 }
 
 /**
