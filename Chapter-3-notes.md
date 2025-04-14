@@ -526,6 +526,31 @@ On the surface it's like `inline`: a mere *hint* to the compiler that the progra
 
 But more importantly, in C, it **disables** the address of operator on the variable, i.e. there shall be **no pointers** to it, which makes aliasing impossible, which unlocks some optimization tricks. OTOH C++ is more free in this regard: if you take address of some `register` variable, then it's the `register` keyword that got ignored.
 
+## The Rust [Once](https://github.com/rust-lang/rust/blob/c580c498a1fe144d7c5b2dfc7faab1a229aa288b/library/std/src/sys/sync/once/futex.rs) Memory Ordering Implementation
+
+Note that all the atomic fields are kept private, so we only need to consider what synchronizes with what in this file.
+In particular, the only `Release` ordering is the `impl<'a> Drop for CompletionGuard<'a>`, so all other `Acquire` orderings' job is to synchronize with the `impl Drop`.
+
+Observe that if not considering `POISONED`/`ignore_poisoning`, the possible executions yield rather simple modification orders:
+
+- `state_and_queued & STATE_MASK` goes from `INCOMPLETE`, `RUNNING`, then `COMPLETE`
+  - In particular the `COMPLETE` is stored by the `impl<'a> Drop for CompletionGuard<'a>` with `Release`
+- `state_and_queued & QUEUED` may or may not go from `0` to `1`
+
+So the `loop` with _load-acquire_, in particular the failure case of `compare_exchange_weak` in `call`, is straightforward: it needs to synchronize with `impl<'a> Drop for CompletionGuard<'a>`, for if some thread were to see `COMPLETE`, we better make sure it sees all the artifacts of the given function.
+
+But how about the success case?
+We don't care about which thread runs the function, but there exists unique thread who runs the function. That's the case for `Relaxed`. In fact that's exactly what we used in `wait`, in which function we do not run any critical section but sleep...
+Thus this `Acquire` in `call` is probably meant for the `ignore_poisoning`/`POISONED` case: it _needs_ to _synchronizes with_ _**something**_...
+
+Again, there's no other place that may synchronize with the `Acquire` here in `call`, so it must be the `impl<'a> Drop for CompletionGuard<'a>`.
+It's the success case, so the `STATE_MASK` part of `state_and_queued` is either `INCOMPLETE` or `POISONED`.
+OTOH `impl<'a> Drop for CompletionGuard<'a>` sets `state_and_queued` to either `POISONED` or `COMPLETE`, which is again the only place the `Acquire` may synchronize with.
+Thus this `Acquire`, in the success case of `compare_exchange_weak` in `call`, is meant for synchronizing on the `POISONED` status with some `impl<'a> Drop for CompletionGuard<'a>`: the function which just panicked _happen-before_ the following operations (in program order) of `call`.
+In fact the following operations (in program order) in this particular invocation of `call` sees _all_ the artifacts of previous invocations of `call` which did run some `impl FnOnce`: the only concurrent accesses to `state_and_queued` are CAS/RMW operations, in particular the `impl<'a> Drop for CompletionGuard<'a>` form _release sequences_.
+
+So there you have it: it's to make sure that whatever residuals/artifacts are there by the thread who just panicked _happens-before_ this invocation of `call`, so in particular if you're `ignore_poisoning`, you may safely clean them up: all that's there are visible.
+
 ## Generic Questions
 
 - So why exactly does kernels also choose to turn on virtual memory?
