@@ -97,8 +97,8 @@ The [`userinit`](kernel/proc.c) function first `allocproc`, which allocates the 
         - Do not forget the `sz` field of the `struct proc` PCB!
             - Note that `trampoline` and `trapframe` are not counted
             - These two fields track the size of the user memory space
-    2. Set `epc` of the `trapframe` in `struct proc` PCB to `0`, meaning when return, it starts from the first instruction
-    3. Set `sp` of the `trapframe` in `struct proc` PCB to `PGSIZE`, meaning that only (for now) page of the user space contains both the stack and `.text`...
+    2. `(struct proc).trapframe.epc = 0`, meaning upon return, start from the first instruction
+    3. `(struct proc).trapframe.sp = 0`, meaning that only (at least for now) page of the user space contains both its user stack and `.text`
         - Safety concerns?
 
 [supervisor.adoc](https://github.com/riscv/riscv-isa-manual/blob/869612154a1c7646994567cd14da3784c568dc92/src/supervisor.adoc)
@@ -115,6 +115,15 @@ Well you always have to register _some machine code somewhere_. That's what `stv
 - What's the purpose of [`struct spinlock wait_lock`](kernel/proc.c)? When and how to use it?
 - `sfence.vma`: why the spec suggests when recycling ASID (which XV6 implicitly does since it does no ASID for now), one should `sfence.vma` _after_ changing the `satp` to with the recycled ASID? Wouldn't that imply implicitly referencing stale physical address being possible?
 - Safety concerns when `userinit` sets the user `.text` and stack to the same page?
+
+### XV6 Interrupt Handling Questions
+
+- Why does `kernel/kernelvec.S` explicitly state that `tp` shall not be restored since the context might had been picked up by another CPU?
+    - In [`kerneltrap`](kernel/trap.c), the CPU that got interrupted during in supervisor mode might call [`yield`](kernel/proc.c) if it's timer interrupt.
+    - And thus the context (probably the `struct proc` PCB?) might be picked up by other CPUs
+- How does [`myproc`](kernel/proc.c) work?
+    - It's simple: [`scheduler`](kernel/proc.c) as picking up the process to run also sets the pointer to the `struct proc` PCB, unsetting it upon giving up the PCB. So it's non-null iff we're in the kernel mode due to some process. And `yield` is called only if that's the case.
+- What would happen just after we installed the kernel interruption handler and before we picked up any task during in [`scheduler`](kernel/proc.c) in `main`?
 
 ## [preshing.com, memory ordering at compile time](https://preshing.com/20120625/memory-ordering-at-compile-time)
 
