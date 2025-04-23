@@ -101,6 +101,17 @@ The [`userinit`](kernel/proc.c) function first `allocproc`, which allocates the 
     3. `(struct proc).trapframe.sp = 0`, meaning that only (at least for now) page of the user space contains both its user stack and `.text`
         - Safety concerns?
 
+### [`forkret`](kernel/proc.c)
+
+1. Initialize the filesystem with [`fsinit`](kernel/fs.c)
+    - The function may sleep, thus delegate the task to some (to be run) user process
+    - To ensure one and only one thread runs the function `fsinit`, a simplified `std::sync::OnceLock` of Rust is implemented here in the fork.
+      - The real implementation of Rust involves e.g. Linux `futex` s.t. thread is put to sleep instead of busy loop
+        - The Rust implementation handles generic panics, spread poisonning, and synchronization between all the previous attempts and this run, so more care on memory ordering were taken into consideration
+        - In particular, the CAS success case for the thread to pick up the job is `Acquire` to synchronize with some drop guard.
+        - [forum question on this regard](https://users.rust-lang.org/t/help-understanding-the-memory-ordering-in-std-oncelock/128361)
+      - Again here out interrupt were on and we may sleep, so indeed the unique run of `fsinit` may turn out to be a product of collective effort of several HARTs.
+
 [supervisor.adoc](https://github.com/riscv/riscv-isa-manual/blob/869612154a1c7646994567cd14da3784c568dc92/src/supervisor.adoc)
 > Note that writing `satp` does not imply any ordering constraints between page-table updates and subsequent address translations, nor does it imply any invalidation of address-translation caches. If the new address space’s page tables have been modified, or if an ASID is reused, it may be necessary to execute an SFENCE.VMA instruction (see `sfence.vma`) after, or in some cases before, writing `satp`.
 
@@ -119,10 +130,10 @@ Well you always have to register _some machine code somewhere_. That's what `stv
 ### XV6 Interrupt Handling Questions
 
 - Why does `kernel/kernelvec.S` explicitly state that `tp` shall not be restored since the context might had been picked up by another CPU?
-    - In [`kerneltrap`](kernel/trap.c), the CPU that got interrupted during in supervisor mode might call [`yield`](kernel/proc.c) if it's timer interrupt.
-    - And thus the context (probably the `struct proc` PCB?) might be picked up by other CPUs
+  - In [`kerneltrap`](kernel/trap.c), the CPU that got interrupted during in supervisor mode might call [`yield`](kernel/proc.c) if it's timer interrupt.
+  - And thus the context (probably the `struct proc` PCB?) might be picked up by other CPUs
 - How does [`myproc`](kernel/proc.c) work?
-    - It's simple: [`scheduler`](kernel/proc.c) as picking up the process to run also sets the pointer to the `struct proc` PCB, unsetting it upon giving up the PCB. So it's non-null iff we're in the kernel mode due to some process. And `yield` is called only if that's the case.
+  - It's simple: [`scheduler`](kernel/proc.c) as picking up the process to run also sets the pointer to the `struct proc` PCB, unsetting it upon giving up the PCB. So it's non-null iff we're in the kernel mode due to some process. And `yield` is called only if that's the case.
 - What would happen just after we installed the kernel interruption handler and before we picked up any task during in [`scheduler`](kernel/proc.c) in `main`?
 
 ## [preshing.com, memory ordering at compile time](https://preshing.com/20120625/memory-ordering-at-compile-time)
