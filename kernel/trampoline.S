@@ -84,10 +84,6 @@ uservec:
         # fetch the kernel page table address, from p->trapframe->kernel_satp.
         ld t1, 0(a0)
 
-        # wait for any previous memory operations to complete, so that
-        # they use the user page table.
-        sfence.vma zero, zero
-
         # install the kernel page table.
         csrw satp, t1
 

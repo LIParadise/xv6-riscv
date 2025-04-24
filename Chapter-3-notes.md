@@ -81,9 +81,10 @@ The [`userinit`](kernel/proc.c) function first `allocproc`, which allocates the 
         - [`trampoline`](kernel/trampoline.S) at `TRAMPOLINE` high user space VA
             - No allocation except user page table tree: it's just making existing kernel `.text` available in the user VA
             - No `PTE_U`
-        - [`trapframe`](kernel/proc.h) (which XV6 just allocated for this process via kernel direct map) at `TRAPFRAME` high user space VA
+        - [`trapframe`](kernel/proc.h) (which XV6 just `kalloc` for this process via kernel direct map) at `TRAPFRAME` high user space VA
             - Thus this physical page is mapped twice here, one via kernel direct map via the `struct proc` PCB, one in the high VA user space of the process
             - Allocated by the kernel, of which kernel direct map VA is recorded in the `struct proc` PCB, and mapped again in the user VA.
+            - Note it contains also the interrupt handler for user space, [`uservec`](kernel/trampoline.S).
             - No `PTE_U`
     2. Kernel virtual memory space
         - Allocate the page table `pagetable` of the `struct proc` PCB
@@ -135,6 +136,10 @@ Well you always have to register _some machine code somewhere_. That's what `stv
 - How does [`myproc`](kernel/proc.c) work?
   - It's simple: [`scheduler`](kernel/proc.c) as picking up the process to run also sets the pointer to the `struct proc` PCB, unsetting it upon giving up the PCB. So it's non-null iff we're in the kernel mode due to some process. And `yield` is called only if that's the case.
 - What would happen just after we installed the kernel interruption handler and before we picked up any task during in [`scheduler`](kernel/proc.c) in `main`?
+- What if some interrupts happen during when disable interrupt e.g. [`intr_off`](kernel/riscv.h)/[`push_off`](kernel/spinlock.c)?
+  - On x86, it's [suggested](https://stackoverflow.com/questions/22280281) that interrupts might be lost if the ISR took too long.
+    - [tasklets](http://www.wowotech.net/irq_subsystem/tasklet.html), top halves, bottom halves, free the ISR from the heavy lifting and delegate them to routines where interrupt are enabled
+    - [Threaded Interrupt Handler](http://lwn.net/Articles/302043)
 
 ## [preshing.com, memory ordering at compile time](https://preshing.com/20120625/memory-ordering-at-compile-time)
 

@@ -82,7 +82,10 @@ struct cpu *mycpu(void)
     return c;
 }
 
-// Return the current struct proc *, or zero if none.
+/*
+ * Return pointer to the current PCB, `struct proc *`; zero if none.
+ * Handles interrupt via `push_off`/`push_on`.
+ */
 struct proc *myproc(void)
 {
     push_off();
