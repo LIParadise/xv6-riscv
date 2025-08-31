@@ -132,6 +132,11 @@ static uintptr_t kinit_kaslr_worker()
     }
     else
     {
+        /*
+         * how to fit 4 elements contiguously in array of length 5?
+         * you have 2 choices: `0..=3` or `1..=4`
+         * and (5-4+1) is 2.
+         */
         kaslr_start =
             GENERIC_PTR_ADD(void *, free_ram_start, PGSIZE *(krnd64() % (free_pages - kernel_size_in_pages + 1)));
         free_range_exclude_subrange(kernel_end_marked_by_ld, (void *)PHYSTOP, kaslr_start, kernel_size_in_pages);
@@ -143,7 +148,11 @@ static uintptr_t kinit_kaslr_worker()
         {
             panic("kmem insane: kinit_kaslr (2nd)");
         }
-        /* copy kernel only after the allocator initialization: we want the data present in relocated kernel! */
+
+        /*
+         * copy kernel only after the allocator initialization:
+         * this way relocated kernel's memory is already initialized!
+         */
         memcpy(kaslr_start, (void *)KERNBASE, kernel_size_in_pages * PGSIZE);
         const uintptr_t kaslr_offset = ((uintptr_t)kaslr_start) - ((uintptr_t)KERNBASE);
         {
@@ -185,7 +194,9 @@ static uintptr_t kinit_kaslr_worker()
 
             /*
              * Need to modify the lock for its pointee would got tainted after KASLR done
-             * since we would later reclaim the pages on which the original kernel lives.
+             * since we would later reclaim the pages on which the original kernel lives:
+             * in particular the `name` field is string so in `.text`.
+             *
              * We're the only running HART now (HART 0), so re-init lock is fine.
              */
             initlock(GENERIC_PTR_ADD(struct spinlock *, &kmem.lock, kaslr_offset),

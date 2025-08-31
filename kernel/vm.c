@@ -278,8 +278,13 @@ void uvmfirst(pagetable_t pagetable, uchar *src, uint sz)
     char *mem;
 
     if (sz >= PGSIZE)
+    {
         panic("uvmfirst: more than a page");
-    mem = kalloc();
+    }
+    if (0 == (mem = kalloc()))
+    {
+        panic("uvmfirst: no memory?!");
+    }
     memset(mem, 0, PGSIZE);
     mappages(pagetable, 0, PGSIZE, (uint64)mem, PTE_W | PTE_R | PTE_X | PTE_U);
 
