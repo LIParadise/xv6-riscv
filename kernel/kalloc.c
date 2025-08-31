@@ -127,7 +127,7 @@ static uintptr_t kinit_kaslr_worker()
          * Just don't do it since XV6 is already tiny,
          * unless you want to port XV6 onto some puny RISC-V platform.
          */
-        freerange((void *)KERNBASE, (void *)free_ram_start);
+        freerange((void *)kernel_end_marked_by_ld, (void *)PHYSTOP);
         return 0;
     }
     else
