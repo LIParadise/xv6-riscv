@@ -62,18 +62,10 @@ pagetable_t kvmmake(const uintptr_t kaslr_offset)
                sys_get_free_pages());
         freerange((void *)(uintptr_t)KERNBASE,
                   GENERIC_PTR_SUB(void *, PGROUNDUP((uintptr_t)kernel_end_marked_by_ld), kaslr_offset));
-        if (!kmem_sane_check())
-        {
-            panic("kmem insane: kvmmake (1st)");
-        }
-        if (!kmem_sane_check())
-        {
-            panic("kmem insane: kvmmake (2nd)");
-        }
         printf("debug: KASLR offset %lu == 0x%llx, pages %lu\n", kaslr_offset, (unsigned long long)kaslr_offset,
                sys_get_free_pages());
+        kvmmap(kpgtbl, KERNBASE, KERNBASE, kaslr_offset, PTE_R | PTE_W);
     }
-    kvmmap(kpgtbl, KERNBASE, KERNBASE, kaslr_offset, PTE_R | PTE_W);
 
     // map KASLR relocated kernel text executable and read-only.
     kvmmap(kpgtbl, kaslr_offset + KERNBASE, kaslr_offset + KERNBASE, (uint64)etext - (kaslr_offset + KERNBASE),
@@ -89,24 +81,28 @@ pagetable_t kvmmake(const uintptr_t kaslr_offset)
     // allocate and map a kernel stack for each process.
     proc_mapstacks(kpgtbl);
 
+    if (!kmem_sane_check() || !kmem_sane_check())
+    {
+        panic("kmem insane: kvmmake");
+    }
+
     return kpgtbl;
 }
 
 /**
  * Non-reentrant function: only called once after boot.
  *
- * Initialize the one `kernel_pagetable`
- *
- * FIXME
- * should map the relocated pages instead of hardcoded pages
+ * Initialize the one `kernel_pagetable` after reclaiming the ram occupied by the old kernel (KASLR).
  */
 void kvminit(const uintptr_t kaslr_offset)
 {
     kernel_pagetable = kvmmake(kaslr_offset);
 }
 
-// Switch h/w page table register to the kernel's page table,
-// and enable paging.
+/**
+ * Switch hardware page table register to the kernel's page table,
+ * and enable paging.
+ */
 void kvminithart()
 {
     // wait for any previous writes to the page table memory to finish.
@@ -121,14 +117,18 @@ void kvminithart()
 /**
  * Return the address of the PTE in page table pagetable
  * that corresponds to virtual address va.
- * If alloc != 0, create any required page-table pages.
+ *
+ * Top level page is assumed to had been allocated,
+ * (level-2 for Sv39)
+ * if alloc != 0, create required non-top-level page table pages
+ * (level-1 and level-0 for Sv39)
  *
  * N.B.
- * 1. The fresh L0 page table is `memset` to all zero,
+ * 1. We `memset` to all zero for newly allocated pages,
  *    thus if user add new pages to the page table via only this function,
- *    and that if user is sure that this input VA must not be in the table,
- *    user may check the `PTE_V` bit of the returned PTE:
- *    if that bit is set, it's an error in `kalloc`, giving out aliased memory.
+ *    thus user may check the `PTE_V` bit of the returned PTE:
+ *    if that bit is set, than the VA had been mapped:
+ *    if user is sure this VA shall not have been mapped, then it's an error.
  * 2. Return `NULL` if page absent and either of the following:
  *    a. alloc flag not set
  *    b. `kalloc` failed, probably because out of memory
@@ -229,8 +229,9 @@ int mappages(pagetable_t pagetable, const uint64 va, const uint64 size, const ui
     return 0;
 }
 
-// Remove npages of mappings starting from va. va must be
-// page-aligned. The mappings must exist.
+// Remove `npages` of mappings starting from `va`.
+// `va` must be page-aligned.
+// The mappings must exist.
 // Optionally free the physical memory.
 void uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 {
@@ -277,13 +278,20 @@ void uvmfirst(pagetable_t pagetable, uchar *src, uint sz)
     char *mem;
 
     if (sz >= PGSIZE)
+    {
         panic("uvmfirst: more than a page");
-    mem = kalloc();
+    }
+    if (0 == (mem = kalloc()))
+    {
+        panic("uvmfirst: no memory?!");
+    }
     memset(mem, 0, PGSIZE);
     mappages(pagetable, 0, PGSIZE, (uint64)mem, PTE_W | PTE_R | PTE_X | PTE_U);
-    // why not `memcpy`? `kalloc` shall not give out aliased pages...
-    // well we don't have C standard library to link to.
-    memmove(mem, src, sz);
+
+    // this function is only used during boot,
+    // and source is `initcode.S` assembly from kernel `.data`,
+    // so no aliasing shall ever occur: `kmem` shall not contain kernel code/data.
+    memcpy(mem, src, sz);
 }
 
 // Allocate PTEs and physical memory to grow process from oldsz to
@@ -372,14 +380,23 @@ void freewalk(pagetable_t pagetable)
 
 /**
  * Free user memory pages, then free page-table pages.
+ *
+ * See also `proc_freepagetable` in `kernel/proc.c`:
+ * it handles the trampoline and trapframe,
+ * and we care only about the user memory (`PTE_U`).
  */
 void uvmfree(pagetable_t pagetable, uint64 sz)
 {
     if (sz > 0)
     {
         /*
-         * This is how much we kernel had given out in `exec`:
-         * XV6 isn't the best in either space efficiency or speed.
+         * This is how much we kernel had given to the process
+         * (exclude trampoline and trapframe):
+         * XV6 isn't the best in either functionality, space efficiency, or speed,
+         * as it always puts `.text` at process VA 0,
+         * and eagerly create every page the process had asked for (no CoW).
+         *
+         * In turn, freeing the PTE leaves is as simple as this one single call.
          */
         uvmunmap(pagetable, 0, PGROUNDUP(sz) / PGSIZE, 1);
     }

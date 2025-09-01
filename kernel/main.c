@@ -44,7 +44,6 @@ void main()
         printf("xv6 kernel is booting\n");
         printf("\n");
 
-        /* TODO: free the old RAM */
         kvminit(kaslr_offset); // create kernel page table
         kvminithart();         // turn on paging
         procinit();            // process table
@@ -89,7 +88,7 @@ void main()
             {
                 /* wait for HART 0 to prepare KASLR `kaslr_offset` */
             }
-            void (*relocated_main)(void) = (void *)(((uint64)(void *)main) + kaslr_offset);
+            void (*relocated_main)(void) = GENERIC_PTR_ADD(void (*)(void), &main, kaslr_offset);
             relocated_main();
         }
     }

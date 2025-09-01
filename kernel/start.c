@@ -78,7 +78,7 @@ void start()
     w_tp(id);
 
     // switch to supervisor mode and jump to main().
-    __asm__ volatile("mret");
+    __asm__ volatile("mret" ::: "memory");
 }
 
 // ask each hart to generate timer interrupts.

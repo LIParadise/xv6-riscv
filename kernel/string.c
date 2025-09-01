@@ -90,17 +90,16 @@ char *strncpy(char *s, const char *t, int n)
 }
 
 // Like strncpy but guaranteed to NUL-terminate.
-char *safestrcpy(char *s, const char *t, int n)
+char *safestrcpy(char *dst, const char *src, int len)
 {
-    char *os;
-
-    os = s;
-    if (n <= 0)
-        return os;
-    while (--n > 0 && (*s++ = *t++) != 0)
-        ;
-    *s = 0;
-    return os;
+    if (len > 0)
+    {
+        while (--len > 0 && (*dst++ = *src++) != 0)
+        {
+        }
+        *dst = 0;
+    }
+    return dst;
 }
 
 int strlen(const char *s)
