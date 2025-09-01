@@ -325,6 +325,9 @@ Finally it jumps back to userspace via `userret`
 
 So why exactly `sfence.vma` _after_ `csrw satp`?
 
+It's actually not that complicated: just make sure that instruction is at both [before and after](https://github.com/riscv/riscv-isa-manual/discussions/1959#discussioncomment-12820820) the root page table `satp` change.
+In XV6's case, it's the `trampoline` (`kernel/trampoline.S`) piece of code that got mapped multiple times: kernel direct VA in the `.text` region, kernel high VA, and in each process's user address space high VA; aside from the direct VA, all of other mappings, which are exactly what we care about, are using `TRAMPOLINE`.
+
 ### `uservec` (`kernel/trampoline.S`)
 
 The first step diving into kernel, i.e. right before `usertrap`.
@@ -363,7 +366,12 @@ The spinlock is to ensure every modification (writes) are visible (_happens-befo
 Note that the registered syscall number `SYS_exec` (`kernel/syscall.c`) is `sys_exec` (`kernel/sysfile.c`).
 It prepares for the call to the actual implementation `exec`.
 Note that `sys_exec` is a `void (*) (void)` i.e. function accepting `void` and returning `void`, how on earth does this work? How are the user supplied parametered passed to the kernel?
-Well we're doing syscall, `ecall` with `a7` set to `SYS_exec`, meaning the user space is trapped via `uservec`/`usertrap`, and kernel may just access the contents right from `TRAPFRAME` to get the C calling ABI registers `a0` and `a1`: `argaddr` and `fetchaddr` helpers (`kernel/syscall.c`).
+Well we're doing syscall, `ecall` with `a7` set to `SYS_exec`, meaning the user space is trapped via `uservec` then `usertrap`, and kernel may just access the contents right from `TRAPFRAME` to get the C calling ABI registers `a0` and `a1`, see `syscall` (`kernel/syscall.c`), and `argaddr` and `fetchaddr` helpers (`kernel/syscall.c`).
+
+Similarly, how does the kernel return to the user space, carrying all the goodies? In this case, the "return to user space" has two possibilities, one returning to the original process, one returning to the new process, freshly read from the ELF. The answer lies in the resp. system calls and `syscall` helper.
+
+In `exec`'s case, it modifies the PC and stack pointer via high VA `TRAPFRAME` of the calling process (`myproc() -> trapframe -> epc` and `pc`) iff everything goes as expected. This way we naturally `usertrapret` to the new process.
+The return code is handled by the `syscall`: it stores the actual return call of the function doing the actual heavy lifting (in this case `exec` in `kernel/exec.c`) in the `a0` at `TRAPFRAME` of the calling process. So in our case, to match the C calling convention and ABI, `int main(int argc, char* argv[])`, the `exec` returns `argc` upon success, and some other error codes to notify the original process that `exec` syscall had failed.
 
 # Questions
 
