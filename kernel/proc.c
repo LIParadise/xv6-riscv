@@ -5,15 +5,13 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include <stdatomic.h>
 
 struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
 
 struct proc *initproc;
-
-int             nextpid = 1;
-struct spinlock pid_lock;
 
 extern void forkret(void);
 static void freeproc(struct proc *p);
@@ -47,12 +45,16 @@ void proc_mapstacks(pagetable_t kpgtbl)
     }
 }
 
-// initialize the proc table.
+/**
+ * initialize the proc table.
+ *
+ * TODO
+ * figure out what, when, why, and how `wait_lock`
+ */
 void procinit(void)
 {
     struct proc *p;
 
-    initlock(&pid_lock, "nextpid");
     initlock(&wait_lock, "wait_lock");
     for (p = proc; p < &proc[NPROC]; p++)
     {
@@ -80,7 +82,10 @@ struct cpu *mycpu(void)
     return c;
 }
 
-// Return the current struct proc *, or zero if none.
+/*
+ * Return pointer to the current PCB, `struct proc *`; zero if none.
+ * Handles interrupt via `push_off`/`push_on`.
+ */
 struct proc *myproc(void)
 {
     push_off();
@@ -92,14 +97,17 @@ struct proc *myproc(void)
 
 int allocpid()
 {
-    int pid;
-
-    acquire(&pid_lock);
-    pid     = nextpid;
-    nextpid = nextpid + 1;
-    release(&pid_lock);
-
-    return pid;
+    static atomic_int_fast32_t pid = 1;
+    // We don't care about happens-before relationship,
+    // but atomicity and uniqueness of PID.
+    //
+    // We maintain the convention that the first user process `init` having PID `1`
+    // since HART0 initializes everything including this PID allocation convention
+    // before other HARTs may do their work.
+    //
+    // Q: why 32-bit
+    // A: not that there's a reason but the original XV6 implementation is, too.
+    return atomic_fetch_add_explicit(&pid, 1, memory_order_relaxed);
 }
 
 // Look in the process table for an UNUSED proc.
@@ -154,9 +162,11 @@ found:
     return p;
 }
 
-// free a proc structure and the data hanging from it,
-// including user pages.
-// p->lock must be held.
+/**
+ * Destruct a `struct proc` and the data hanging from it,
+ * including its trapframe and page table.
+ * p->lock must be held.
+ */
 static void freeproc(struct proc *p)
 {
     if (p->trapframe)
@@ -176,20 +186,30 @@ static void freeproc(struct proc *p)
 }
 
 // Create a user page table for a given process, with no user memory,
-// but with trampoline and trapframe pages.
+// but with trampoline and trapframe pages at high VA.
+//
+// Process must already have it's own PA trapframe.
 pagetable_t proc_pagetable(struct proc *p)
 {
+    if ((!p) || (!p->trapframe))
+    {
+        panic("proc_pagetable: refuse to create process without dedicated kernel VA trapframe");
+    }
+
     pagetable_t pagetable;
 
     // An empty page table.
-    pagetable = uvmcreate();
-    if (pagetable == 0)
+    if (0 == (pagetable = uvmcreate()))
+    {
         return 0;
+    }
 
     // map the trampoline code (for system call return)
     // at the highest user virtual address.
-    // only the supervisor uses it, on the way
-    // to/from user space, so not PTE_U.
+    //
+    // Only the supervisor uses it,
+    // on the way to/from user space,
+    // so not `PTE_U`.
     if (mappages(pagetable, TRAMPOLINE, PGSIZE, (uint64)trampoline, PTE_R | PTE_X) < 0)
     {
         uvmfree(pagetable, 0);
@@ -200,6 +220,7 @@ pagetable_t proc_pagetable(struct proc *p)
     // trampoline.S.
     if (mappages(pagetable, TRAPFRAME, PGSIZE, (uint64)(p->trapframe), PTE_R | PTE_W) < 0)
     {
+        // the PA lies within kernel text: do not unmap it!
         uvmunmap(pagetable, TRAMPOLINE, 1, 0);
         uvmfree(pagetable, 0);
         return 0;
@@ -208,8 +229,11 @@ pagetable_t proc_pagetable(struct proc *p)
     return pagetable;
 }
 
-// Free a process's page table, and free the
-// physical memory it refers to.
+/**
+ * Destructor of user process page table:
+ * the physical pages are freed.
+ * (Of course, except the trampoline and trapframe)
+ */
 void proc_freepagetable(pagetable_t pagetable, uint64 sz)
 {
     uvmunmap(pagetable, TRAMPOLINE, 1, 0);
@@ -231,7 +255,7 @@ void userinit(void)
     struct proc *p;
 
     p        = allocproc();
-    initproc = p;
+    initproc = p; // this write is protected by spinlock of the `init` process
 
     // allocate one user page and copy initcode's instructions
     // and data into it.
@@ -484,7 +508,7 @@ void scheduler(void)
         {
             // nothing to run; stop running on this core until an interrupt.
             intr_on();
-            __asm__ volatile("wfi");
+            __asm__ volatile("wfi" ::: "memory");
         }
     }
 }
@@ -529,21 +553,95 @@ void yield(void)
 // will swtch to forkret.
 void forkret(void)
 {
-    static int first = 1;
+    enum OnceLockState
+    {
+        Init          = 0,
+        BeingWorkedOn = 1,
+        Done          = 2,
+    };
+    static atomic_uint_fast8_t file_system_init = Init;
+    uint_fast8_t               it_is_our_job;
 
     // Still holding p->lock from scheduler.
     release(&myproc()->lock);
 
-    if (first)
+oncelock_fsinit:
+    // `memory_order_relaxed` here then `atomic_thread_fence(memory_order_acquire)` when `Done` would also work,
+    // but that should be the hot path, meaning an explicit fence would be suboptimal.
+    switch (atomic_load_explicit(&file_system_init, memory_order_acquire))
     {
-        // File system initialization must be run in the context of a
-        // regular process (e.g., because it calls sleep), and thus cannot
-        // be run from main().
-        fsinit(ROOTDEV);
+    case Done:
+        /* everything ready, no-op */
+        break;
+    case BeingWorkedOn:
+        /* should be not that long from some guy turning it to done, busy wait */
+        while (atomic_load_explicit(&file_system_init, memory_order_relaxed) == BeingWorkedOn)
+        {
+            /*
+             * busy loop, `memory_order_relaxed` suffices,
+             * since the `Done` is guarded by `memory_order_acquire` anyway.
+             */
+        }
+        goto oncelock_fsinit;
+        break; // yeah, pedantic and unnecessary
+    case Init:
+        it_is_our_job = Init;
+        // we need only atomicity here:
+        // as long as one and only one thread picks up the task, we're good to go,
+        // thus `memory_order_relaxed` suffices for the CAS success case
+        if (atomic_compare_exchange_weak_explicit(&file_system_init, &it_is_our_job, BeingWorkedOn,
+                                                  memory_order_relaxed, memory_order_relaxed))
+        {
+            // CAS success, meaning it's this HART's job.
 
-        first = 0;
-        // ensure other cores see first=0.
-        __sync_synchronize();
+            // File system initialization must be run in the context of a regular process
+            // (e.g. because it calls sleep),
+            // and thus cannot be run from `main`.
+            fsinit(ROOTDEV);
+            {
+                /*
+                 * ensure other cores see first=0.
+                 *
+                 * TODO:
+                 * 1. How does "full memory barrier" work?
+                 * 2. Does the correctness of non-reentrance of this implementation rely on the process spinlocks?
+                 * 3. What's equivalent of "full memory barrier" in C11/C++11 atomics?
+                 */
+                // __sync_synchronize();
+            }
+            /*
+             * Effectively we're holding some (implicit) spinlock over something that might sleep...
+             *
+             * TODO:
+             * 1. Verify safety or refactor
+             *    - The `memory_order_release` does *not* guard against later `fork` by `initcode`/`init`
+             *      being seen by other HART before we're done,
+             *      so there might be some other processes already got created,
+             *      and those HARTs that pick up such processes would fall into busy loop.
+             *    - The `BeingWorkedOn` state shall not be omitted,
+             *      for if there were only two state,
+             *      that `memory_order_acquire` the state being already initialized does imply work had been done,
+             *      but that `memory_order_acquire` the state being yet initialized cannot guarantee non-reentrance.
+             *    - These above two points are really two sides of the same coin.
+             *      This `OnceLock`/`OnceCell` is ugly and needs refactor.
+             * 2. How does Rust provide `OnceLock`/`OnceCell` anyway...?
+             */
+            // establish happens-before relationship: if one thread sees `Done`, it must have been done.
+            atomic_store_explicit(&file_system_init, Done, memory_order_release);
+        }
+        else
+        {
+            /*
+             * CAS failed, either suriously or somebody just picked up the job, check again.
+             * `memory_order_relaxed` suffices the ordering for this failed case,
+             * since any load of `Done` would be guarded by `memory_order_acquire`.
+             */
+            goto oncelock_fsinit;
+        }
+        break; // yeah, pedantic and unnecessary
+    default:
+        panic("unreachable!");
+        break;
     }
 
     usertrapret();

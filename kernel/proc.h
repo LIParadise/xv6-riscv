@@ -108,10 +108,10 @@ struct proc
         struct proc *parent; // Parent process
 
         // these are private to the process, so p->lock need not be held.
-        uint64            kstack;        // Virtual address of kernel stack
+        uint64            kstack;        // PA/kernel direct VA, set during `proc_mapstacks` in `kvmmake`, never unset
         uint64            sz;            // Size of process memory (bytes)
         pagetable_t       pagetable;     // User page table
-        struct trapframe *trapframe;     // data page for trampoline.S
+        struct trapframe *trapframe;     // data page for trampoline.S, PA/kernel direct VA
         struct context    context;       // swtch() here to run process
         struct file      *ofile[NOFILE]; // Open files
         struct inode     *cwd;           // Current directory

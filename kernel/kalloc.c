@@ -127,11 +127,16 @@ static uintptr_t kinit_kaslr_worker()
          * Just don't do it since XV6 is already tiny,
          * unless you want to port XV6 onto some puny RISC-V platform.
          */
-        freerange((void *)KERNBASE, (void *)free_ram_start);
+        freerange((void *)kernel_end_marked_by_ld, (void *)PHYSTOP);
         return 0;
     }
     else
     {
+        /*
+         * how to fit 4 elements contiguously in array of length 5?
+         * you have 2 choices: `0..=3` or `1..=4`
+         * and (5-4+1) is 2.
+         */
         kaslr_start =
             GENERIC_PTR_ADD(void *, free_ram_start, PGSIZE *(krnd64() % (free_pages - kernel_size_in_pages + 1)));
         free_range_exclude_subrange(kernel_end_marked_by_ld, (void *)PHYSTOP, kaslr_start, kernel_size_in_pages);
@@ -143,7 +148,11 @@ static uintptr_t kinit_kaslr_worker()
         {
             panic("kmem insane: kinit_kaslr (2nd)");
         }
-        /* copy kernel only after the allocator initialization: we want the data present in relocated kernel! */
+
+        /*
+         * copy kernel only after the allocator initialization:
+         * this way relocated kernel's memory is already initialized!
+         */
         memcpy(kaslr_start, (void *)KERNBASE, kernel_size_in_pages * PGSIZE);
         const uintptr_t kaslr_offset = ((uintptr_t)kaslr_start) - ((uintptr_t)KERNBASE);
         {
@@ -185,7 +194,9 @@ static uintptr_t kinit_kaslr_worker()
 
             /*
              * Need to modify the lock for its pointee would got tainted after KASLR done
-             * since we would later reclaim the pages on which the original kernel lives.
+             * since we would later reclaim the pages on which the original kernel lives:
+             * in particular the `name` field is string so in `.text`.
+             *
              * We're the only running HART now (HART 0), so re-init lock is fine.
              */
             initlock(GENERIC_PTR_ADD(struct spinlock *, &kmem.lock, kaslr_offset),
@@ -197,15 +208,15 @@ static uintptr_t kinit_kaslr_worker()
 
 /**
  * KASLR and populate (most) of the memory.
- * In particular the pages occupied by the initial kernel are yet reclaimed.
+ * In particular the pages occupied by the initial kernel are not yet reclaimed.
  */
 void kinit_kaslr(uintptr_t *const p_kaslr_offset, atomic_bool *const kaslr_done,
                  atomic_uint_fast8_t *const harts_yet_done_kaslr)
 {
     uint64 kaslr_offset, ra, sp;
     /* store the return address for later we shall return to relocated kernel */
-    __asm__ volatile("addi %0, ra, 0x0" : "=r"(ra));
-    __asm__ volatile("addi %0, sp, 0x0" : "=r"(sp));
+    __asm__ volatile("addi %0, ra, 0x0" : "=r"(ra)::"memory");
+    __asm__ volatile("addi %0, sp, 0x0" : "=r"(sp)::"memory");
 
     kaslr_offset = kinit_kaslr_worker();
     if (0 == kaslr_offset)
@@ -242,7 +253,7 @@ void kinit_kaslr(uintptr_t *const p_kaslr_offset, atomic_bool *const kaslr_done,
      * so another register is used.
      */
     ra += kaslr_offset;
-    __asm__ volatile("sd %0, " KASLR_RA_OFFSET_FROM_SP "(%1)" : : "r"(ra), "r"(sp));
+    __asm__ volatile("sd %0, " KASLR_RA_OFFSET_FROM_SP "(%1)" : : "r"(ra), "r"(sp) : "memory");
 
     return;
 }
@@ -315,7 +326,7 @@ void kfree(void *pa)
  * the memory given out from here never aliases.
  *
  * Return value is zero if cannot be allocated,
- * else it's pointer intended for kernel's own usage.
+ * else it's PA/kernel direct VA, filled with junk.
  */
 void *kalloc(void)
 {
@@ -368,7 +379,7 @@ bool kmem_sane_check(void)
         uint64_t *tag = ALIGN_UP(uint64_t *, GENERIC_PTR_ADD(void *, node, sizeof(struct kmem_linked_list_node)));
         if ((uint64_t)(-1) == *tag)
         {
-            // `kfree` sets the memory to all `1`; mark as walked.
+            // `kfree` sets the memory to all bits `1`; mark as walked.
             *tag = actual_pages++;
             node = node->next;
         }

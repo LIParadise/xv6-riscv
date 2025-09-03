@@ -4,7 +4,7 @@
 static inline uint64 r_mhartid()
 {
     uint64 x;
-    __asm__ volatile("csrr %0, mhartid" : "=r"(x));
+    __asm__ volatile("csrr %0, mhartid" : "=r"(x)::"memory");
     return x;
 }
 
@@ -19,13 +19,13 @@ static inline uint64 r_mhartid()
 static inline uint64 r_mstatus()
 {
     uint64 x;
-    __asm__ volatile("csrr %0, mstatus" : "=r"(x));
+    __asm__ volatile("csrr %0, mstatus" : "=r"(x)::"memory");
     return x;
 }
 
 static inline void w_mstatus(uint64 x)
 {
-    __asm__ volatile("csrw mstatus, %0" : : "r"(x));
+    __asm__ volatile("csrw mstatus, %0" : : "r"(x) : "memory");
 }
 
 // machine exception program counter, holds the
@@ -33,7 +33,7 @@ static inline void w_mstatus(uint64 x)
 // exception will go.
 static inline void w_mepc(uint64 x)
 {
-    __asm__ volatile("csrw mepc, %0" : : "r"(x));
+    __asm__ volatile("csrw mepc, %0" : : "r"(x) : "memory");
 }
 
 // Supervisor Status Register, sstatus
@@ -47,26 +47,26 @@ static inline void w_mepc(uint64 x)
 static inline uint64 r_sstatus()
 {
     uint64 x;
-    __asm__ volatile("csrr %0, sstatus" : "=r"(x));
+    __asm__ volatile("csrr %0, sstatus" : "=r"(x)::"memory");
     return x;
 }
 
 static inline void w_sstatus(uint64 x)
 {
-    __asm__ volatile("csrw sstatus, %0" : : "r"(x));
+    __asm__ volatile("csrw sstatus, %0" : : "r"(x) : "memory");
 }
 
 // Supervisor Interrupt Pending
 static inline uint64 r_sip()
 {
     uint64 x;
-    __asm__ volatile("csrr %0, sip" : "=r"(x));
+    __asm__ volatile("csrr %0, sip" : "=r"(x)::"memory");
     return x;
 }
 
 static inline void w_sip(uint64 x)
 {
-    __asm__ volatile("csrw sip, %0" : : "r"(x));
+    __asm__ volatile("csrw sip, %0" : : "r"(x) : "memory");
 }
 
 // Supervisor Interrupt Enable
@@ -76,13 +76,13 @@ static inline void w_sip(uint64 x)
 static inline uint64 r_sie()
 {
     uint64 x;
-    __asm__ volatile("csrr %0, sie" : "=r"(x));
+    __asm__ volatile("csrr %0, sie" : "=r"(x)::"memory");
     return x;
 }
 
 static inline void w_sie(uint64 x)
 {
-    __asm__ volatile("csrw sie, %0" : : "r"(x));
+    __asm__ volatile("csrw sie, %0" : : "r"(x) : "memory");
 }
 
 // Machine-mode Interrupt Enable
@@ -90,13 +90,13 @@ static inline void w_sie(uint64 x)
 static inline uint64 r_mie()
 {
     uint64 x;
-    __asm__ volatile("csrr %0, mie" : "=r"(x));
+    __asm__ volatile("csrr %0, mie" : "=r"(x)::"memory");
     return x;
 }
 
 static inline void w_mie(uint64 x)
 {
-    __asm__ volatile("csrw mie, %0" : : "r"(x));
+    __asm__ volatile("csrw mie, %0" : : "r"(x) : "memory");
 }
 
 // supervisor exception program counter, holds the
@@ -104,13 +104,13 @@ static inline void w_mie(uint64 x)
 // exception will go.
 static inline void w_sepc(uint64 x)
 {
-    __asm__ volatile("csrw sepc, %0" : : "r"(x));
+    __asm__ volatile("csrw sepc, %0" : : "r"(x) : "memory");
 }
 
 static inline uint64 r_sepc()
 {
     uint64 x;
-    __asm__ volatile("csrr %0, sepc" : "=r"(x));
+    __asm__ volatile("csrr %0, sepc" : "=r"(x)::"memory");
     return x;
 }
 
@@ -118,39 +118,39 @@ static inline uint64 r_sepc()
 static inline uint64 r_medeleg()
 {
     uint64 x;
-    __asm__ volatile("csrr %0, medeleg" : "=r"(x));
+    __asm__ volatile("csrr %0, medeleg" : "=r"(x)::"memory");
     return x;
 }
 
 static inline void w_medeleg(uint64 x)
 {
-    __asm__ volatile("csrw medeleg, %0" : : "r"(x));
+    __asm__ volatile("csrw medeleg, %0" : : "r"(x) : "memory");
 }
 
 // Machine Interrupt Delegation
 static inline uint64 r_mideleg()
 {
     uint64 x;
-    __asm__ volatile("csrr %0, mideleg" : "=r"(x));
+    __asm__ volatile("csrr %0, mideleg" : "=r"(x)::"memory");
     return x;
 }
 
 static inline void w_mideleg(uint64 x)
 {
-    __asm__ volatile("csrw mideleg, %0" : : "r"(x));
+    __asm__ volatile("csrw mideleg, %0" : : "r"(x) : "memory");
 }
 
 // Supervisor Trap-Vector Base Address
 // low two bits are mode.
 static inline void w_stvec(uint64 x)
 {
-    __asm__ volatile("csrw stvec, %0" : : "r"(x));
+    __asm__ volatile("csrw stvec, %0" : : "r"(x) : "memory");
 }
 
 static inline uint64 r_stvec()
 {
     uint64 x;
-    __asm__ volatile("csrr %0, stvec" : "=r"(x));
+    __asm__ volatile("csrr %0, stvec" : "=r"(x)::"memory");
     return x;
 }
 
@@ -159,14 +159,14 @@ static inline uint64 r_stimecmp()
 {
     uint64 x;
     // __asm__ volatile("csrr %0, stimecmp" : "=r" (x) );
-    __asm__ volatile("csrr %0, 0x14d" : "=r"(x));
+    __asm__ volatile("csrr %0, 0x14d" : "=r"(x)::"memory");
     return x;
 }
 
 static inline void w_stimecmp(uint64 x)
 {
     // __asm__ volatile("csrw stimecmp, %0" : : "r" (x));
-    __asm__ volatile("csrw 0x14d, %0" : : "r"(x));
+    __asm__ volatile("csrw 0x14d, %0" : : "r"(x) : "memory");
 }
 
 // Machine Environment Configuration Register
@@ -174,25 +174,25 @@ static inline uint64 r_menvcfg()
 {
     uint64 x;
     // __asm__ volatile("csrr %0, menvcfg" : "=r" (x) );
-    __asm__ volatile("csrr %0, 0x30a" : "=r"(x));
+    __asm__ volatile("csrr %0, 0x30a" : "=r"(x)::"memory");
     return x;
 }
 
 static inline void w_menvcfg(uint64 x)
 {
     // __asm__ volatile("csrw menvcfg, %0" : : "r" (x));
-    __asm__ volatile("csrw 0x30a, %0" : : "r"(x));
+    __asm__ volatile("csrw 0x30a, %0" : : "r"(x) : "memory");
 }
 
 // Physical Memory Protection
 static inline void w_pmpcfg0(uint64 x)
 {
-    __asm__ volatile("csrw pmpcfg0, %0" : : "r"(x));
+    __asm__ volatile("csrw pmpcfg0, %0" : : "r"(x) : "memory");
 }
 
 static inline void w_pmpaddr0(uint64 x)
 {
-    __asm__ volatile("csrw pmpaddr0, %0" : : "r"(x));
+    __asm__ volatile("csrw pmpaddr0, %0" : : "r"(x) : "memory");
 }
 
 // use riscv's sv39 page table scheme.
@@ -204,13 +204,13 @@ static inline void w_pmpaddr0(uint64 x)
 // holds the address of the page table.
 static inline void w_satp(uint64 x)
 {
-    __asm__ volatile("csrw satp, %0" : : "r"(x));
+    __asm__ volatile("csrw satp, %0" : : "r"(x) : "memory");
 }
 
 static inline uint64 r_satp()
 {
     uint64 x;
-    __asm__ volatile("csrr %0, satp" : "=r"(x));
+    __asm__ volatile("csrr %0, satp" : "=r"(x)::"memory");
     return x;
 }
 
@@ -218,7 +218,7 @@ static inline uint64 r_satp()
 static inline uint64 r_scause()
 {
     uint64 x;
-    __asm__ volatile("csrr %0, scause" : "=r"(x));
+    __asm__ volatile("csrr %0, scause" : "=r"(x)::"memory");
     return x;
 }
 
@@ -226,20 +226,20 @@ static inline uint64 r_scause()
 static inline uint64 r_stval()
 {
     uint64 x;
-    __asm__ volatile("csrr %0, stval" : "=r"(x));
+    __asm__ volatile("csrr %0, stval" : "=r"(x)::"memory");
     return x;
 }
 
 // Machine-mode Counter-Enable
 static inline void w_mcounteren(uint64 x)
 {
-    __asm__ volatile("csrw mcounteren, %0" : : "r"(x));
+    __asm__ volatile("csrw mcounteren, %0" : : "r"(x) : "memory");
 }
 
 static inline uint64 r_mcounteren()
 {
     uint64 x;
-    __asm__ volatile("csrr %0, mcounteren" : "=r"(x));
+    __asm__ volatile("csrr %0, mcounteren" : "=r"(x)::"memory");
     return x;
 }
 
@@ -247,7 +247,7 @@ static inline uint64 r_mcounteren()
 static inline uint64 r_time()
 {
     uint64 x;
-    __asm__ volatile("csrr %0, time" : "=r"(x));
+    __asm__ volatile("csrr %0, time" : "=r"(x)::"memory");
     return x;
 }
 
@@ -273,7 +273,7 @@ static inline int intr_get()
 static inline uint64 r_sp()
 {
     uint64 x;
-    __asm__ volatile("mv %0, sp" : "=r"(x));
+    __asm__ volatile("mv %0, sp" : "=r"(x)::"memory");
     return x;
 }
 
@@ -282,19 +282,19 @@ static inline uint64 r_sp()
 static inline uint64 r_tp()
 {
     uint64 x;
-    __asm__ volatile("mv %0, tp" : "=r"(x));
+    __asm__ volatile("mv %0, tp" : "=r"(x)::"memory");
     return x;
 }
 
 static inline void w_tp(uint64 x)
 {
-    __asm__ volatile("mv tp, %0" : : "r"(x));
+    __asm__ volatile("mv tp, %0" : : "r"(x) : "memory");
 }
 
 static inline uint64 r_ra()
 {
     uint64 x;
-    __asm__ volatile("mv %0, ra" : "=r"(x));
+    __asm__ volatile("mv %0, ra" : "=r"(x)::"memory");
     return x;
 }
 
@@ -302,7 +302,7 @@ static inline uint64 r_ra()
 static inline void sfence_vma()
 {
     // the zero, zero means flush all TLB entries.
-    __asm__ volatile("sfence.vma zero, zero");
+    __asm__ volatile("sfence.vma x0, x0" ::: "memory");
 }
 
 /**
@@ -312,7 +312,7 @@ static inline void sfence_vma()
 static inline uint32 r_seed()
 {
     uint32 ret;
-    __asm__ volatile("csrrw %0, seed, x0" : "=r"(ret));
+    __asm__ volatile("csrrw %0, seed, x0" : "=r"(ret)::"memory");
     return ret;
 }
 

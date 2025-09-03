@@ -27,7 +27,9 @@ You may implement software recursive scheme as you wish, but RISC-V spec simply 
 
 ## The First User Space Process `user/initcode.S`
 
-After the kernel internal housekeeping is done (`kernel/main.c`, XV6 makes direct map VA for all the PA (by default 128 MiB), after which some of the PA are dubbed as kernel stacks and mapped with some high VA (so these PA are actually mapped twice, still safe, since they are `kalloc`-ed but not `kfree`-ed, so normally we only access them via these high VA): XV6 defines a fixed amount of maximum processes, so the XV6 kernel knows exactly where the kerenl VA are. And many more stuff.), the kernel attempts to create the first process, which is the special `user/initcode.S`, which in turn calls `exec("/init")`. Note that this process has only three pages upon start: one at user space VA zero for the code and the stack, two for trompoline and trapframe as usual (since it needs system call `exec`). Then `exec` does the heavy lifting.
+After the kernel internal housekeeping is done (`kernel/main.c`, XV6 makes direct map VA for all the PA (by default 128 MiB), after which some of the PA are dubbed as kernel stacks and mapped with some high VA (so these PA are actually mapped twice, still safe, since they are `kalloc`-ed but not `kfree`-ed, so normally we only access them via these high VA): XV6 defines a fixed amount of maximum processes, so the XV6 kernel knows exactly where the kernel VA are. And many more stuff.), the kernel attempts to create the first process, which is the special `user/initcode.S`, which in turn calls `exec("/init")`. Note that this process has only _three_ pages upon start: one at user space VA zero for the code and the stack, two for trampoline and trapframe as usual (since it needs system call `exec`). Then `exec` does the heavy lifting.
+
+In particular, `userinit` places the `initcode` right at VA 0, which is why it sets PCB's `epc` to 0 and `sp` to `PGSIZE`.
 
 ## Alignments
 
@@ -132,7 +134,7 @@ $ riscv64-elf-nm kernel/kernel | grep main
 > I remember that most of the targets used to encode the symbol values into GOT entries when enabling pie. So that when the dynamic linker (or elf loader) resolving the RELATIVE relocation, they will load the original symbol values from the got entries first, and then plus the load offset and restore the values back to the got entries. A total of one load and one store are required to resolve one RELATIVE relocation.
 >
 > But RISC-V encodes the symbol value to the addend of RELATIVE relocation directly, so it doesn’t matter whether or not the symbol value is written into got entry. Our dynamic linker will plus the load offset to the addend of RELATIVE relocation, and then store the value to got entries. Therefore, we only need one store when relocating one RELATIVE relocation, this should reduce the burdens of dynamic linker.
-> 
+>
 > As I know, x86 uses the former method, so they should always encode the symbol values into got entries with or without pie. I’m not sure if it’s still the same now, since I haven’t seen the details in a while.
 
 ### [technovelty](https://www.technovelty.org/linux/plt-and-got-the-key-to-code-sharing-and-dynamic-libraries.html)
@@ -221,6 +223,20 @@ Let's ignore the second part for a sec, and `grep jal kernel/kernel.asm | grep -
 
 So on XV6 all we need is `-pie` flag to the linker, and the kernel is already KASLR-ready.
 
+## Linker Scripts
+
+Some symbols we may not easily determine before compilation/linking is done, e.g. where does kernel `.text`/`.data` end.
+Or say we want to manually resolve all the [`.rela.dyn`](https://dram.page/p/relative-relocs-explained) symbols to relocate our kernel (KASLR).
+We'll need some symbol to be supplemented by the linker.
+We need linker scripts.
+
+- [`PROVIDE`](https://sourceware.org/binutils/docs/ld/PROVIDE.html)
+    - Supply the symbol with meaning, e.g. `PROVIDE(etext = .)` as last command of `.text`
+    - C arrays are _different_ from pointers
+        - if you do `PROVIDE(c_extern_array_by_ld = .)`, then that _array_ lives at the _current output location counter_, and thus accessing elements is as if reading from that memory region.
+        - OTOH if you do `PROVIDE(c_extern_ptr_by_ld = .)`, then that _pointer_ lives at the _current output location counter_, and thus accessing via the pointer is as if _reinterpret whatever 8 bytes starting from `.` (assuming 64-bit architecture) as pointer_ and thus probably makes subsequent access invalid.
+    - See [also](https://users.informatik.haw-hamburg.de/~krabat/FH-Labor/gnupro/5_GNUPro_Utilities/c_Using_LD/ldLinker_scripts.html#PROVIDE_command).
+
 ### Criticisms
 
 [Spender@grsecutiry](https://forums.grsecurity.net/viewtopic.php?f=7&t=3367)
@@ -261,32 +277,136 @@ Maybe also feed the value over some hash algorithms!
 
 Basically, always `/dev/urandom` unless you're on a device with low entropy and just booted, or you need a _information theoretic secure one-time pad_; for the latter, maybe you know better than this anyway.
 
+## System Call `exec` and User Processes in XV6
+
+The `kstack` field of each `struct proc` is set early during boot in `proc_mapstacks` in `kvmmake`, and never unset during XV6 lifetime.
+The `trapframe` is a page allocated on process start and deallocated on process dead, *unique* to that instantce of process: it caches registers representing the state of that process.
+The `trampoline` is a (shared) physical page that's mapped as read only and not accessible to user space in high VA for each process for entering the kernel. In XV6, similar to `trapframe`, it's mapped/unmapped at the beginning/end of lifetime of an instance of a process. Though we don't really need to unmap it, no?
+
+Upon initialize of a generic process, aside from its page table (in which contain `trampoline` at `TRAMPOLINE` and `trapframe` at `TRAPFRAME` which does *not* contribute to process size btw), kernel stack `kstack`, and PID, the only interesting thing that got initialized is the `ra` field of `context` field of `struct proc` pointing to `forkret` (`kernel/proc.c`) and `sp` pointing to *end* of `kstack` of that process: `swtch.S` `swtch` to `forkret` with empty kernel stack.
+
+For the first process `initcode`/`init`, three other fields are initialized in `userinit`: `epc` in `trapframe` set to zero for _user program counter_, `sp` in `trapframe` set to `PGSIZE` for _user stack pointer_, and a page containing machine instructions of `initcode.S` is allocated, mapped, and filled with the instructions.
+
+### `usertrapret` (`kernel/trap.c`)
+
+This function is used as last procedure in both `forkret` and `usertrap`.
+It sets user mode trap for syscalls, interrupts, and exceptions to `uservec` (`kernel/trampoline.S`).
+
+It stores essential kernel information in _PCB's `trapframe`_: it prepares required pieces for `uservec`.
+- Kernel page table `satp`
+- Kernel stack pointer
+    - Set to _beginning_ of associated kernel stack, i.e. no stack
+    - Arithmetically speaking, add `PGSIZE` from PCB's `kstack` pointer.
+- User space trap routine
+    - User space trap is done in a two-step manner in XV6
+        1. `csrw stvec` with `uservec` (`kernel/trampoline.S`)
+            - Mainly save all the general purpose registers onto `TRAPFRAME` high VA
+        2. `uservec` extracts the function pointer from predefined offset from `TRAPFRAME` as the next procedure to jump to
+        3. That offset is written by us (`usertrapret`) to `usertrap`, which does the heavy lifting
+- CPU ID (In XV6, `tp` register)
+
+It then restores essential user space information from that stored in PCB (we're still in kernel context!):
+- User space program counter
+    - Set to zero in `userinit`
+    - Stored as-is in `usertrap`
+    - Set to ELF specified location in syscall `exec`
+- Loads user space page table and pass it to `userret` (`kernel/trampoline.S`)
+
+Finally it jumps back to userspace via `userret`
+1. Restore user space page table
+    - Obtained via the parameter: it's the last call in `usertrapret`
+    - `sfence.vma` and `csrw`
+2. Restore generic RISCV registers
+    - `TRAPFRAME` in high VA of individual process's user space, so this is done _after_ page table swap
+3. Return to user space
+    - User space traps are already enabled with vector set to `uservec` in `usertrapret`
+
+#### Problems
+
+So why exactly `sfence.vma` _after_ `csrw satp`?
+
+It's actually not that complicated: just make sure that instruction is at both [before and after](https://github.com/riscv/riscv-isa-manual/discussions/1959#discussioncomment-12820820) the root page table `satp` change.
+In XV6's case, it's the `trampoline` (`kernel/trampoline.S`) piece of code that got mapped multiple times: kernel direct VA in the `.text` region, kernel high VA, and in each process's user address space high VA; aside from the direct VA, all of other mappings, which are exactly what we care about, are using `TRAMPOLINE`.
+
+### `uservec` (`kernel/trampoline.S`)
+
+The first step diving into kernel, i.e. right before `usertrap`.
+Its operation relies on `usertrapret` since it hardcodes various locations.
+
+1. Save all the general purpose registers
+2. Load kernel page table and kernel stack from predefined location on the `TRAPFRAME`
+    - `sfence.vma`
+3. Load some function pointer from predefined location on the `TRAPFRAME`
+    - `usertrap`
+
+### `usertrap` (`kernel/trap.c`)
+
+TODO
+
+### `swtch` (`kernel/swtch.S`)
+
+`ra`, `sp`, and various _callee-saved_ registers (i.e. they shall be preserved across function calls) `s0` to `s11` are switched from supplied argument.
+This is where RISCV C ABI comes into the picture: other general purpose registers are _caller-saved_, and since `swtch` is a C method, the mere act of calling it instructs the compiler to save/restore _caller-saved_ registers for us.
+In particular, this with the `ret` instruction at the end enables us to _return_ from arbirary places to defined location: we jump between functions!
+
+### `sched` (`kernel/proc.c`)
+
+In XV6, the only place we call `swtch` is `scheduler` and here.
+In particular it helps hold the invariant required by the `scheduler`: one need to hold the process's lock.
+It's useful for handling user space transferring control back into the kernel.
+
+### `scheduler` (`kernel/proc.c`)
+
+It might seem weird that we try to lock every process we see and check if it's waiting CPU resource: if it's already running on some other CPU, wouldn't the HART end up spinning the spinlock for nothing?
+Well, the first thing a HART starts running certain process, the first thing it should do is releasing the spinlock.
+The spinlock is to ensure every modification (writes) are visible (_happens-before_) to other HARTs: we should not and do not hold them for extended period of time.
+
+### `exec` (`kernel/exec.c`)
+
+Note that the registered syscall number `SYS_exec` (`kernel/syscall.c`) is `sys_exec` (`kernel/sysfile.c`).
+It prepares for the call to the actual implementation `exec`.
+Note that `sys_exec` is a `void (*) (void)` i.e. function accepting `void` and returning `void`, how on earth does this work? How are the user supplied parametered passed to the kernel?
+Well we're doing syscall, `ecall` with `a7` set to `SYS_exec`, meaning the user space is trapped via `uservec` then `usertrap`, and kernel may just access the contents right from `TRAPFRAME` to get the C calling ABI registers `a0` and `a1`, see `syscall` (`kernel/syscall.c`), and `argaddr` and `fetchaddr` helpers (`kernel/syscall.c`).
+
+Similarly, how does the kernel return to the user space, carrying all the goodies? In this case, the "return to user space" has two possibilities, one returning to the original process, one returning to the new process, freshly read from the ELF. The answer lies in the resp. system calls and `syscall` helper.
+
+In `exec`'s case, it modifies the PC and stack pointer via high VA `TRAPFRAME` of the calling process (`myproc() -> trapframe -> epc` and `pc`) iff everything goes as expected. This way we naturally `usertrapret` to the new process.
+The return code is handled by the `syscall`: it stores the actual return call of the function doing the actual heavy lifting (in this case `exec` in `kernel/exec.c`) in the `a0` at `TRAPFRAME` of the calling process. So in our case, to match the C calling convention and ABI, `int main(int argc, char* argv[])`, the `exec` returns `argc` upon success, and some other error codes to notify the original process that `exec` syscall had failed.
+
 # Questions
 
 - Why `sfence.vma` twice when `kvminithart`? In particular, why `sfence.vma` after chaing `satp`, how are there any stale entries if we just flushed it?
 - Why `kernelvec` is provided by assembly code, rather than generic C code?
-  - It provides **supervisor trap vector**, i.e. the function would be living in the `stvec` register, i.e. traps go here, then `kerneltrap`. Need to save context!
+    - It provides **supervisor trap vector**, i.e. the function would be living in the `stvec` register, i.e. traps go here, then `kerneltrap`. Need to save context!
 - What's kernel address space randomization? Does shuffling sections and/or shift some pages count? What did we benifit from such a measure?
   - Maybe after page table tree creation, shuffle the PTE leaves?
     - entropy source?
-      - The `seed` CSR, e.g. `csrrw rd, seed, x0`, see also [lists.riscv.org](https://lists.riscv.org/g/tech-privileged/topic/risc_v_tech_crypto_ext/90925122), gives some basic randomness.
+        - The `seed` CSR, e.g. `csrrw rd, seed, x0`, see also [lists.riscv.org](https://lists.riscv.org/g/tech-privileged/topic/risc_v_tech_crypto_ext/90925122), gives some basic randomness.
     - it seems we need LOTS of `memcpy`...
-      - not really, since KASLR or ASLR in general isn't about the structure of the mapping between VA and PA, it's what are put where on the VA.
+        - not really, since KASLR or ASLR in general isn't about the structure of the mapping between VA and PA, it's what are put where on the VA.
     - other CPUs shall not be running yet, so their stack may be used for this purpose if we need some work space...
-      - well yes but actually no, since we already have `kalloc`, why bother?
+        - well yes but actually no, since we already have `kalloc`, why bother?
   - randomize the linked list behind `kalloc`?
     - no, this merely changes where the kernel page table tree lives in the physical memory, its VA-PA K-V mapping is still direct map
     - well ackchyually above is not the reason: again, what PA are responsible for what VA is not the point, it's what are where in in terms of VA.
 - How does the Linux kernel achieve KASLR without `-mcmodel=medany`? How does it handle all the relocations?
 - Why `uvmfree` (`kernel/vm.c`) tries to `kfree` pages starting from VA `0` given the size parameter non-zero? What are placed there in the user address space?
-  - It's since the `exec` system call implementation of XV6 simply allocates all the `vaddr` plus required `memsz` as specified in each `ELF_PROG_LOAD` program header in the ELF header, from zero! (`kernel/exec.c`)
-  - I.e. the XV6 allocates eagerly all the memory asked by the ELF, s.t. memory from user VA 0 till max in ELF header (probably some program header's `vaddr + memsz`).
-  - Thus it needs to free all those pages.
+    - It's since the `exec` system call implementation of XV6 simply allocates all the `vaddr` plus required `memsz` as specified in each `ELF_PROG_LOAD`   program header in the ELF header, from zero! (`kernel/exec.c`)
+    - I.e. the XV6 allocates eagerly all the memory asked by the ELF, s.t. memory from user VA 0 till max in ELF header (probably some program header's   `vaddr + memsz`).
+    - Thus it needs to free all those pages.
 - Why `freewalk` (`kernel/vm.c`), which should be called on `satp` to page table trees of which all the L0 pages had been removed and the purpose of the call being freeing the L1 pages, seem to deviate from the RISC-V hardware algorithm?
-  - It's a boolean logic encapsulation.
-  - `!PTE_V` PTEs considered freed
-  - We assume no leaves, thus `!(PTE_R || PTE_X)` which is  `(!PTE_R) && (!PTE_X)`, assming pages are valid, this implies `!PTE_W`, since by Sv39, `PTE_W` implies `PTE_R`
+    - It's a boolean logic encapsulation.
+    - `!PTE_V` PTEs considered freed
+    - We assume no leaves, thus `!(PTE_R || PTE_X)` which is  `(!PTE_R) && (!PTE_X)`, assming pages are valid, this implies `!PTE_W`, since by Sv39, `PTE_W` implies `PTE_R`
 - `kstack` in `struct proc`, lifetime seem absurd: kernel VA allocated in `proc_mapstacks`, assigned to the process in `procinit`, but not cleared in `free_proc`? See also `kernel/proc.c`
 - Why `myproc` twice in `exec` system call? (`kernel/exec.c`)
-  - Seems to be related to possible scheduling due to `end_op` (`kernel/log.c` and `kernel/virtio_disk.c`), this call may change CPU
-  - But we're pointing to the global fixed array of process table, right? Then we should not really care?
+    - Seems to be related to possible scheduling due to `end_op` (`kernel/log.c` and `kernel/virtio_disk.c`), this call may change CPU
+    - But we're pointing to the global fixed array of process table, right? Then we should not really care?
+- Why user process `trampoline` is mapped/unmapped at birth/death of process, unlike `kstack` which is mapped till XV6 itself dies? Seems like a job that's unnecessarily done multiple times...
+- Why isn't zero a valid system call number?
+- Why not enable interrupt via `intr_on` like in `usertrap` in `kerneltrap`? I guess RISC-V automatically disables interrupt when trap/interrupt from user mode to supervisor mode, but same cannot be stated when in supervisor mode (mode not changed)?
+- Why write only `sepc` and `sstatus` before exiting `kerneltrap`?
+- Somehow long argument causes `user/sh.c` to fail to `exec`: it continued rather than spawned a new process. Why does `exec` syscall fail?
+    - It seems that the syscall functions normally; rather, it's `user/sh.c`'s parsing that's causing the problem here.
+- Devise a way to make debuggin in KASLR easier
+    - All the symbols are moved to some random location...
